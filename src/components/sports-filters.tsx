@@ -33,15 +33,18 @@ export function SportsFilters({
   value,
   onChange,
   showKickoff = true,
+  matchesList,
 }: {
   value: SportsFilterState;
   onChange: (v: SportsFilterState) => void;
   showKickoff?: boolean;
+  matchesList?: typeof matches;
 }) {
+  const activeMatches = matchesList && matchesList.length > 0 ? matchesList : matches;
   const leagues = Array.from(
     new Set(
-      matches
-        .filter((m) => value.sport === "all" || m.sport.toLowerCase() === value.sport)
+      activeMatches
+        .filter((m) => value.sport === "all" || m.sport.toLowerCase() === value.sport.toLowerCase())
         .map((m) => m.league),
     ),
   ).sort();
@@ -118,10 +121,10 @@ export function SportsFilters({
 
 export function filterMatches(all: typeof matches, f: SportsFilterState) {
   return all.filter((m) => {
-    if (f.sport !== "all" && m.sport.toLowerCase() !== f.sport) return false;
-    if (f.league !== "all" && m.league !== f.league) return false;
+    if (f.sport !== "all" && m.sport.toLowerCase() !== f.sport.toLowerCase()) return false;
+    if (f.league !== "all" && m.league.toLowerCase() !== f.league.toLowerCase()) return false;
     if (f.kickoff !== "all" && m.day !== f.kickoff) return false;
-    if (!m.markets.some((mk) => mk.id === f.market)) return false;
+    if (f.market !== "all" && !m.markets.some((mk) => mk.id === f.market)) return false;
     return true;
   });
 }

@@ -24,6 +24,8 @@ import { flagFor, formatUgx, matches } from "@/lib/betting-data";
 import { MatchCard } from "@/components/match-card";
 import { BetSlip } from "@/components/bet-slip";
 import { useBetSlip } from "@/lib/betslip";
+import { usePrematchGames } from "@/hooks/use-prematch-games";
+import { useLiveGames } from "@/hooks/use-live-games";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -75,33 +77,39 @@ const banners = [
 ];
 
 const topLeagues = [
-  { name: "Uganda Premier League", country: "Uganda" },
   { name: "Premier League", country: "England" },
   { name: "La Liga", country: "Spain" },
+  { name: "Superleague", country: "Greece" },
+  { name: "Bundesliga", country: "Austria" },
+  { name: "Eredivisie", country: "Netherlands" },
   { name: "Serie A", country: "Italy" },
-  { name: "Bundesliga", country: "Germany" },
   { name: "Ligue 1", country: "France" },
-  { name: "CAF Champions League", country: "Africa" },
-  { name: "NBA", country: "USA" },
+  { name: "Uganda Premier League", country: "Uganda" },
 ];
 
+function useCombos(activeMatches: typeof matches) {
+  const pool = activeMatches.length > 0 ? activeMatches : matches;
+  const popular = pool.filter((m) => m.popular);
+  const basePool = popular.length >= 3 ? popular : pool;
 
-function useCombos() {
   return [
     {
       id: "combo1",
       name: "Weekend banker",
-      picks: matches.filter((m) => m.popular).slice(0, 3),
+      picks: basePool.slice(0, 3),
     },
     {
       id: "combo2",
       name: "Goals galore",
-      picks: matches.filter((m) => m.markets.some((k) => k.id === "ou25")).slice(0, 3),
+      picks:
+        pool.filter((m) => m.markets.some((k) => k.id === "ou25")).slice(0, 3).length >= 2
+          ? pool.filter((m) => m.markets.some((k) => k.id === "ou25")).slice(0, 3)
+          : basePool.slice(1, 4),
     },
     {
       id: "combo3",
-      name: "Uganda special",
-      picks: matches.filter((m) => m.country === "Uganda").slice(0, 2),
+      name: "Top flight special",
+      picks: basePool.slice(2, 5),
     },
   ];
 }
@@ -196,10 +204,11 @@ function SectionHead({
 
 const PAGE_SIZE = 5;
 
-function SportsGamesSection() {
+function SportsGamesSection({ feedMatches }: { feedMatches: typeof matches }) {
   const [visible, setVisible] = useState(PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const sportMatches = [...matches]
+  const activePool = feedMatches.length > 0 ? feedMatches : matches;
+  const sportMatches = [...activePool]
     .sort((a, b) => Number(b.sport === "Football") - Number(a.sport === "Football"))
     .sort((a, b) => Number(b.popular) - Number(a.popular));
   const shown = sportMatches.slice(0, visible);
@@ -242,17 +251,20 @@ function SportsGamesSection() {
 }
 
 function HomePage() {
-  const combos = useCombos();
+  const { matches: feedMatches } = usePrematchGames();
+  const { matches: liveMatches } = useLiveGames();
+  const combos = useCombos(feedMatches);
   const { toggle, has } = useBetSlip();
-  const featured = matches.filter((m) => m.popular).slice(0, 4);
-  const liveNow = matches.filter((m) => m.live).slice(0, 3);
+  const featured = (feedMatches.length ? feedMatches : matches)
+    .filter((m) => m.popular)
+    .slice(0, 4);
+  const liveNow = liveMatches.slice(0, 3);
   const topGames = [...casinoGames].sort((a, b) => b.popularity - a.popularity).slice(0, 8);
 
   return (
     <main className="relative mx-auto flex w-full max-w-[968px] gap-2 px-0 py-4 md:grid md:h-[calc(100vh-7.5rem)] md:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] md:overflow-hidden md:px-3 md:py-5">
       <div className="no-scrollbar min-w-0 flex-1 space-y-6 md:h-full md:overflow-y-auto md:pb-5 md:pt-0">
         <BannerSlider />
-
 
         <div className="space-y-3">
           <SectionHead title="Top leagues" icon={Trophy} to="/sports" />
@@ -451,7 +463,7 @@ function HomePage() {
           </div>
         </div>
 
-        <SportsGamesSection />
+        <SportsGamesSection feedMatches={feedMatches} />
 
         <div className="space-y-3">
           <SectionHead title="Trending" icon={Sparkles} to="/casino" />
@@ -459,7 +471,13 @@ function HomePage() {
             {topGames.map((g) => (
               <Link
                 key={g.id}
-                to={g.category === "casino" ? "/casino" : g.category === "aviator" ? "/aviator" : "/crash"}
+                to={
+                  g.category === "casino"
+                    ? "/casino"
+                    : g.category === "aviator"
+                      ? "/aviator"
+                      : "/crash"
+                }
                 className="group w-40 shrink-0 overflow-hidden rounded-md border border-border bg-card transition-colors hover:border-accent/60"
               >
                 <div
@@ -486,7 +504,6 @@ function HomePage() {
             ))}
           </div>
         </div>
-
       </div>
 
       <BetSlip />

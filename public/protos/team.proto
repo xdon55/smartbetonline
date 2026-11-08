@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package bet720_protocol_buffers;
+
+message Team {
+    // plain fields
+    string n                = 1;
+}

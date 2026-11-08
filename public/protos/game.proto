@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package bet720_protocol_buffers;
+
+import "google/protobuf/timestamp.proto";
+import "market.proto";
+import "team.proto";
+import "scores.proto";
+
+// user defines the structure
+message Game {
+    // plain fields
+    int32 b                                       = 1;      // blocked 
+    int32 flg                                     = 2;      // flag
+    int32 bm                                      = 3;      // bookmaker id
+    int32 std                                     = 4;      // match id
+    int32 tm                                      = 5;      // matchtime in seconds
+    int32 p                                       = 6;      // period
+    int32 cd                                      = 7;      // code (from SQL Server)
+
+    string st                                     = 8;      // event state id
+    string stn                                    = 9;      // event state name
+    string inf                                    = 10;     // league or player
+    string tss                                    = 11;     // match time
+    
+    google.protobuf.Timestamp d                   = 12;     // time utc (should be converted to UTC before use)
+
+    // reference objects
+    Scores sc                                     = 51;     // scores                                  
+    Team t1                                       = 52;     // team 1
+    Team t2                                       = 53;     // team 2
+
+    // lists
+    repeated Market bt                            = 101;     // markets
+}

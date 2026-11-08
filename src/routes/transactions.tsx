@@ -16,7 +16,8 @@ export const Route = createFileRoute("/transactions")({
       { title: "Transactions · SMARTBET" },
       {
         name: "description",
-        content: "Review your SMARTBET deposits, withdrawals and bet stakes with running balances in UGX.",
+        content:
+          "Review your SMARTBET deposits, withdrawals and bet stakes with running balances in UGX.",
       },
       { property: "og:title", content: "Transactions · SMARTBET" },
       { property: "og:description", content: "Every deposit, withdrawal and stake in one place." },

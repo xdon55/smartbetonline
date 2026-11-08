@@ -83,33 +83,65 @@ export function GameLobby({
             />
           </div>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <select className={selectClass} aria-label="Provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
+            <select
+              className={selectClass}
+              aria-label="Provider"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+            >
               <option value="all">All providers</option>
               {uniq(games.map((g) => g.provider)).map((p) => (
-                <option key={p} value={p}>{p}</option>
+                <option key={p} value={p}>
+                  {p}
+                </option>
               ))}
             </select>
-            <select className={selectClass} aria-label="Game type" value={type} onChange={(e) => setType(e.target.value)}>
+            <select
+              className={selectClass}
+              aria-label="Game type"
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+            >
               <option value="all">All game types</option>
               {uniq(games.map((g) => g.type)).map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t} value={t}>
+                  {t}
+                </option>
               ))}
             </select>
-            <select className={selectClass} aria-label="Volatility" value={volatility} onChange={(e) => setVolatility(e.target.value)}>
+            <select
+              className={selectClass}
+              aria-label="Volatility"
+              value={volatility}
+              onChange={(e) => setVolatility(e.target.value)}
+            >
               <option value="all">Any volatility</option>
               {["Low", "Medium", "High"].map((v) => (
-                <option key={v} value={v}>{v} volatility</option>
+                <option key={v} value={v}>
+                  {v} volatility
+                </option>
               ))}
             </select>
-            <select className={selectClass} aria-label="Sort by" value={sort} onChange={(e) => setSort(e.target.value as SortId)}>
+            <select
+              className={selectClass}
+              aria-label="Sort by"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortId)}
+            >
               {sortOptions.map((s) => (
-                <option key={s.id} value={s.id}>{s.label}</option>
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
               ))}
             </select>
           </div>
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
             <span>{results.length} games</span>
-            <button type="button" onClick={reset} className="font-semibold underline underline-offset-2">
+            <button
+              type="button"
+              onClick={reset}
+              className="font-semibold underline underline-offset-2"
+            >
               Reset filters
             </button>
           </div>
@@ -122,7 +154,10 @@ export function GameLobby({
         ) : (
           <div className="grid grid-cols-2 gap-3 p-3 md:grid-cols-3 lg:grid-cols-4">
             {results.map((game) => (
-              <article key={game.id} className="overflow-hidden rounded-lg border border-border bg-background">
+              <article
+                key={game.id}
+                className="overflow-hidden rounded-lg border border-border bg-background"
+              >
                 <div
                   className="relative flex h-28 items-end p-2"
                   style={{ background: game.gradient }}
@@ -151,13 +186,17 @@ export function GameLobby({
                   <p className="text-[11px] text-muted-foreground">
                     RTP {game.rtp}% · {game.volatility}
                   </p>
-                  <p className="text-[11px] font-semibold text-foreground">Min {ugx(game.minBet)}</p>
+                  <p className="text-[11px] font-semibold text-foreground">
+                    Min {ugx(game.minBet)}
+                  </p>
                   {game.jackpot && (
                     <p className="text-[11px] font-bold text-live">Jackpot {ugx(game.jackpot)}</p>
                   )}
                   <button
                     type="button"
-                    onClick={() => toast.info(`${game.name} launches here once the game provider is connected.`)}
+                    onClick={() =>
+                      toast.info(`${game.name} launches here once the game provider is connected.`)
+                    }
                     className="mt-1 w-full rounded-md bg-odds-active px-2 py-1.5 text-xs font-bold uppercase text-odds-active-foreground"
                   >
                     Play

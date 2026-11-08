@@ -14,7 +14,8 @@ export const Route = createFileRoute("/my-bets/$betId")({
       { title: "Bet receipt · SMARTBET" },
       {
         name: "description",
-        content: "Full receipt details for your SMARTBET booking: selections, odds, stake and payout in UGX.",
+        content:
+          "Full receipt details for your SMARTBET booking: selections, odds, stake and payout in UGX.",
       },
       { property: "og:title", content: "Bet receipt · SMARTBET" },
       {
@@ -89,7 +90,9 @@ function BetReceipt() {
               <p className="text-[11px] uppercase text-muted-foreground">
                 {bet.status === "won" ? "Payout" : "Potential"}
               </p>
-              <p className="text-sm font-bold tabular-nums text-accent">{formatUgx(bet.potential)}</p>
+              <p className="text-sm font-bold tabular-nums text-accent">
+                {formatUgx(bet.potential)}
+              </p>
             </div>
           </footer>
         </article>

@@ -21,10 +21,6 @@ export const Route = createFileRoute("/crash")({
     ],
   }),
   component: () => (
-    <GameLobby
-      category="crash"
-      title="Crash"
-      tagline="Ride the multiplier and cash out in time."
-    />
+    <GameLobby category="crash" title="Crash" tagline="Ride the multiplier and cash out in time." />
   ),
 });

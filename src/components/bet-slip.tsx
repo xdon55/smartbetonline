@@ -21,9 +21,20 @@ const quickStakes = [1000, 2000, 5000, 10000];
 
 /** Shared slip content: selections list, stake controls, totals, actions. */
 function SlipBody() {
-  const { selections, remove, clear, stake, setStake, totalOdds, potentialWin, placeBet } =
-    useBetSlip();
+  const {
+    selections,
+    remove,
+    clear,
+    stake,
+    setStake,
+    totalOdds,
+    potentialWin,
+    placeBetAsync,
+    createBookingAsync,
+    loading,
+  } = useBetSlip();
   const [bookingCode, setBookingCode] = useState<string | null>(null);
+  const [actionPending, setActionPending] = useState(false);
 
   if (!selections.length) {
     return (
@@ -37,7 +48,6 @@ function SlipBody() {
 
   return (
     <div className="flex h-full flex-col">
-
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
         <p className="text-[0.7rem] font-bold">{selections.length} selections</p>
         <button
@@ -53,8 +63,8 @@ function SlipBody() {
         {selections.map((s) => (
           <div key={s.id} className="flex items-start gap-3 border-b border-border px-4 py-3">
             <div className="min-w-0 flex-1">
-            <p className="truncate text-[0.7rem] font-bold">{s.match}</p>
-            <p className="text-[0.6rem] text-muted-foreground">
+              <p className="truncate text-[0.7rem] font-bold">{s.match}</p>
+              <p className="text-[0.6rem] text-muted-foreground">
                 {s.market} · <span className="text-foreground font-semibold">{s.pick}</span>
               </p>
             </div>
@@ -74,7 +84,9 @@ function SlipBody() {
               type="button"
               onClick={() => setStake(v)}
               className={`flex-1 rounded-md py-1.5 text-[0.6rem] font-bold tabular-nums transition-colors ${
-                stake === v ? "bg-odds-active text-odds-active-foreground" : "bg-secondary text-secondary-foreground"
+                stake === v
+                  ? "bg-odds-active text-odds-active-foreground"
+                  : "bg-secondary text-secondary-foreground"
               }`}
             >
               {v / 1000}k
@@ -96,23 +108,29 @@ function SlipBody() {
 
         <div className="flex items-center justify-between text-[0.6rem] font-semibold text-muted-foreground">
           <span>Total odds</span>
-          <span className="text-[0.7rem] font-bold tabular-nums text-foreground">{totalOdds.toFixed(2)}</span>
+          <span className="text-[0.7rem] font-bold tabular-nums text-foreground">
+            {totalOdds.toFixed(2)}
+          </span>
         </div>
         <div className="flex items-center justify-between text-[0.6rem] font-semibold text-muted-foreground">
           <span>Potential win</span>
-          <span className="text-[0.7rem] font-bold tabular-nums text-accent">{formatUgx(potentialWin)}</span>
+          <span className="text-[0.7rem] font-bold tabular-nums text-accent">
+            {formatUgx(potentialWin)}
+          </span>
         </div>
 
         {bookingCode && (
           <div className="flex items-center justify-between rounded-md bg-secondary px-3 py-2">
-            <span className="font-display text-[0.8rem] font-bold tracking-widest">{bookingCode}</span>
+            <span className="font-display text-[0.8rem] font-bold tracking-widest text-primary dark:text-accent">
+              {bookingCode}
+            </span>
             <button
               type="button"
               onClick={() => {
                 navigator.clipboard?.writeText(bookingCode);
-                toast.success("Booking code copied");
+                toast.success("Booking code copied to clipboard");
               }}
-              className="inline-flex items-center gap-1 text-[0.6rem] font-bold uppercase"
+              className="inline-flex items-center gap-1 text-[0.6rem] font-bold uppercase hover:opacity-80"
             >
               <Copy className="h-3.5 w-3.5" /> Copy
             </button>
@@ -121,29 +139,43 @@ function SlipBody() {
 
         <button
           type="button"
-          onClick={() => {
-            const code = `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
-            setBookingCode(code);
-            navigator.clipboard?.writeText(code);
-            toast.success(`Booking code ${code} created and copied`);
+          disabled={actionPending || loading}
+          onClick={async () => {
+            setActionPending(true);
+            try {
+              const code = await createBookingAsync();
+              setBookingCode(code);
+              navigator.clipboard?.writeText(code);
+              toast.success(`Booking code ${code} created and copied!`);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Failed to book slip");
+            } finally {
+              setActionPending(false);
+            }
           }}
-          className="w-full rounded-md border border-input py-2.5 text-[0.6rem] font-bold uppercase tracking-wide transition-colors hover:bg-muted"
+          className="w-full rounded-md border border-input py-2.5 text-[0.6rem] font-bold uppercase tracking-wide transition-colors hover:bg-muted disabled:opacity-50"
         >
-          Create booking code
+          {actionPending ? "Generating..." : "Create booking code"}
         </button>
 
         <button
           type="button"
-          onClick={() => {
-            const bet = placeBet();
-            if (bet) {
+          disabled={actionPending || loading}
+          onClick={async () => {
+            setActionPending(true);
+            try {
+              const bet = await placeBetAsync();
               setBookingCode(null);
-              toast.success(`Bet placed · code ${bet.code}`);
+              toast.success(`Bet placed successfully! Ticket: ${bet.code}`);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Bet placement failed");
+            } finally {
+              setActionPending(false);
             }
           }}
-          className="w-full rounded-md bg-accent py-3 text-[0.7rem] font-bold uppercase tracking-wide text-accent-foreground transition-opacity hover:opacity-90"
+          className="w-full rounded-md bg-accent py-3 text-[0.7rem] font-bold uppercase tracking-wide text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
         >
-          Place bet
+          {actionPending ? "Submitting bet..." : "Place bet"}
         </button>
       </div>
     </div>
@@ -186,7 +218,9 @@ export function BetSlip() {
       {open && (
         <div className="fixed inset-0 z-50 flex flex-col bg-card md:hidden">
           <div className="flex items-center justify-between brand-gradient px-4 py-3 text-surface-foreground">
-            <span className="font-display text-[0.7rem] font-bold uppercase tracking-wide">Bet slip</span>
+            <span className="font-display text-[0.7rem] font-bold uppercase tracking-wide">
+              Bet slip
+            </span>
             <button type="button" aria-label="Close bet slip" onClick={() => setOpen(false)}>
               <X className="h-5 w-5" />
             </button>
@@ -199,4 +233,3 @@ export function BetSlip() {
     </>
   );
 }
-

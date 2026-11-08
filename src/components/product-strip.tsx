@@ -32,7 +32,9 @@ export function ProductStrip() {
                 to={p.to}
                 activeOptions={{ exact: p.exact }}
                 activeProps={{ className: "border-accent text-accent" }}
-                inactiveProps={{ className: "border-transparent text-muted-foreground hover:text-foreground" }}
+                inactiveProps={{
+                  className: "border-transparent text-muted-foreground hover:text-foreground",
+                }}
                 className="inline-flex h-9 shrink-0 items-center gap-2 border-b-2 px-3 text-xs font-semibold transition-colors"
               >
                 <p.icon className="h-3.5 w-3.5" />
@@ -52,7 +54,6 @@ export function ProductStrip() {
           )}
         </div>
       </div>
-      
     </>
   );
 }

@@ -94,7 +94,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { title: "SMARTBET · Sports betting in Uganda" },
       {
         name: "description",
-        content: "Bet on football, basketball and more with SMARTBET. Fast odds, live betting and instant payouts in UGX.",
+        content:
+          "Bet on football, basketball and more with SMARTBET. Fast odds, live betting and instant payouts in UGX.",
       },
       { property: "og:title", content: "SMARTBET · Sports betting in Uganda" },
       {

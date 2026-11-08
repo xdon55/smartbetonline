@@ -11,7 +11,8 @@ export const Route = createFileRoute("/casino")({
       { title: "Casino games · SMARTBET" },
       {
         name: "description",
-        content: "Play live roulette, blackjack, game shows and slots in UGX at the SMARTBET casino.",
+        content:
+          "Play live roulette, blackjack, game shows and slots in UGX at the SMARTBET casino.",
       },
       { property: "og:title", content: "Casino games · SMARTBET" },
       {

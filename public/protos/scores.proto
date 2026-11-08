@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package bet720_protocol_buffers;
+
+message Scores {
+    repeated int32 corner           = 101 [packed = true, json_name = "CORNER"] ;
+    repeated int32 freeKick         = 102 [packed = true, json_name = "FREE_KICK"];
+    repeated int32 goal             = 103 [packed = true, json_name = "GOAL"];
+    repeated int32 goalKick         = 104 [packed = true, json_name = "GOAL_KICK"];
+    repeated int32 h1               = 105 [packed = true, json_name = "H1"]; 
+    repeated int32 offside          = 106 [packed = true, json_name = "OFFSIDE"];
+    repeated int32 penalty          = 107 [packed = true, json_name = "PENALTY"];
+    repeated int32 redCard          = 108 [packed = true, json_name = "RED_CARD"];
+    repeated int32 substitution     = 109 [packed = true, json_name = "SUBSTITUTION"];
+    repeated int32 throwIn          = 110 [packed = true, json_name = "THROW_IN"];
+    repeated int32 yellowCard       = 111 [packed = true, json_name = "YELLOW_CARD"];
+}

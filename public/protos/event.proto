@@ -1,0 +1,22 @@
+ syntax = "proto3";
+
+package bet720_protocol_buffers;
+
+import "game.proto";
+
+message Event {
+    // plain fields
+    optional int32 bmId              = 1;        // bookmaker id
+    optional int32 flg               = 2;        // flag or bit mask
+
+    optional string C                = 3;        // command
+    optional string cmd              = 4;        // command response mode
+    optional string eId              = 5;        // event id
+    optional string p                = 6;        // portion
+    string dt                        = 7;        // date
+
+    // reference objects
+
+    // lists
+    repeated Game obj                = 101;
+}

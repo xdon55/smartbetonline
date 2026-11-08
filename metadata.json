@@ -1,0 +1,5 @@
+{
+  "name": "SmartBet Online",
+  "description": "Sports betting and casino platform featuring live match odds, interactive bet slips, instant casino games, wallet management, and transactions.",
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

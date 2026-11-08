@@ -1,18 +1,19 @@
 /**
  * routes/match.$matchId.tsx — MATCH DETAIL page (/match/:matchId).
  * Header banner with fixture info plus the full market list from
- * detailMarkets() (mock extras — replace with provider markets). Every
- * outcome button toggles a bet slip selection. Unknown ids show a fallback.
+ * real SmartBet feeds. Every outcome button toggles a bet slip selection.
  */
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
-import { matches, detailMarkets, flagFor } from "@/lib/betting-data";
+import { ArrowLeft, Loader2 } from "lucide-react";
+import { matches as fallbackMatches, detailMarkets, flagFor, type Match } from "@/lib/betting-data";
 import { useBetSlip } from "@/lib/betslip";
 import { BetSlip } from "@/components/bet-slip";
+import { usePrematchGames, getCachedMatchById } from "@/hooks/use-prematch-games";
+import { useLiveGames } from "@/hooks/use-live-games";
 
 export const Route = createFileRoute("/match/$matchId")({
   head: ({ params }) => {
-    const m = matches.find((x) => x.id === params.matchId);
+    const m = getCachedMatchById(params.matchId);
     const title = m ? `${m.home} v ${m.away} odds · SMARTBET` : "Match odds · SMARTBET";
     const description = m
       ? `All betting markets for ${m.home} v ${m.away} in the ${m.league}. Stake in UGX on SMARTBET.`
@@ -32,7 +33,28 @@ export const Route = createFileRoute("/match/$matchId")({
 function MatchDetail() {
   const { matchId } = Route.useParams();
   const { toggle, has } = useBetSlip();
-  const match = matches.find((m) => m.id === matchId);
+
+  const { matches: prematchMatches, loading: loadingPrematch } = usePrematchGames();
+  const { matches: liveMatches, loading: loadingLive } = useLiveGames();
+
+  // Find match in prematch feed, live feed, or local fallback
+  const match: Match | undefined =
+    prematchMatches.find((m) => m.id === matchId) ||
+    liveMatches.find((m) => m.id === matchId) ||
+    fallbackMatches.find((m) => m.id === matchId);
+
+  const isLoading = (loadingPrematch || loadingLive) && !match;
+
+  if (isLoading) {
+    return (
+      <main className="mx-auto max-w-md px-3 py-16 text-center">
+        <Loader2 className="mx-auto h-8 w-8 animate-spin text-accent" />
+        <p className="mt-4 text-sm font-semibold text-muted-foreground">
+          Loading fixture markets...
+        </p>
+      </main>
+    );
+  }
 
   if (!match) {
     return (
@@ -51,7 +73,10 @@ function MatchDetail() {
     <main className="relative mx-auto flex w-full max-w-[968px] gap-2 px-0 py-3 md:grid md:h-[calc(100vh-7.5rem)] md:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] md:overflow-hidden md:px-3">
       <div className="no-scrollbar min-w-0 flex-1 space-y-3 md:h-full md:overflow-y-auto md:py-3">
         <section className="brand-gradient px-3 py-4 text-surface-foreground md:rounded-lg">
-          <Link to="/" className="mb-3 inline-flex items-center gap-1 text-xs font-semibold opacity-80">
+          <Link
+            to="/"
+            className="mb-3 inline-flex items-center gap-1 text-xs font-semibold opacity-80"
+          >
             <ArrowLeft className="h-3.5 w-3.5" /> Back
           </Link>
           <p className="text-[11px] font-semibold uppercase tracking-wide opacity-80">
@@ -91,6 +116,25 @@ function MatchDetail() {
               {market.outcomes.map((o) => {
                 const id = `${match.id}-${market.id}-${o.id}`;
                 const active = has(id);
+                const isLocked = Boolean(o.locked || o.odds <= 0);
+
+                if (isLocked) {
+                  return (
+                    <div
+                      key={o.id}
+                      title="Odds temporarily locked by live bookmaker"
+                      className="flex h-12 flex-col items-center justify-center rounded-md border border-border/50 bg-muted/30 text-muted-foreground"
+                    >
+                      <span className="max-w-full truncate px-1 text-[10px] font-semibold uppercase opacity-70">
+                        {o.label}
+                      </span>
+                      <span className="flex items-center gap-0.5 text-[11px] font-semibold text-muted-foreground/80">
+                        <span className="text-[10px]">🔒</span> Locked
+                      </span>
+                    </div>
+                  );
+                }
+
                 return (
                   <button
                     key={o.id}
@@ -103,6 +147,10 @@ function MatchDetail() {
                         market: market.name,
                         pick: o.label,
                         odds: o.odds,
+                        betCategory: o.betCategory,
+                        matchOddId: o.matchOddId,
+                        bookMakerId: o.bookMakerId,
+                        isLive: Boolean(match.live),
                       })
                     }
                     className={`flex h-12 flex-col items-center justify-center rounded-md text-sm font-bold tabular-nums transition-colors ${

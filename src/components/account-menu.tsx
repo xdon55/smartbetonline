@@ -26,10 +26,9 @@ import { formatUgx } from "@/lib/betting-data";
 import { ThemeToggle } from "./theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { useWallet } from "@/hooks/use-wallet";
+import { smartBetApi } from "@/lib/api-smartbet";
 
-const guestLinks = [
-  { to: "/auth" as const, label: "Sign in / Register", icon: LogIn },
-];
+const guestLinks = [{ to: "/auth" as const, label: "Sign in / Register", icon: LogIn }];
 
 const authLinks = [
   { to: "/deposit" as const, label: "Deposit", icon: ArrowDownToLine },
@@ -65,7 +64,9 @@ export function AccountMenu() {
       </SheetTrigger>
       <SheetContent side="right" className="w-full p-0 sm:w-80 flex flex-col">
         <SheetHeader className="border-b border-border px-4 py-3">
-          <SheetTitle className="text-left font-display text-lg uppercase tracking-wide">My account</SheetTitle>
+          <SheetTitle className="text-left font-display text-lg uppercase tracking-wide">
+            My account
+          </SheetTitle>
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto">
@@ -104,8 +105,14 @@ export function AccountMenu() {
             {isAuthenticated && (
               <Button
                 variant="ghost"
-                onClick={() => {
+                onClick={async () => {
                   setOpen(false);
+                  try {
+                    await smartBetApi.logOff();
+                  } catch {
+                    // Ignore offline
+                  }
+                  localStorage.removeItem("smartbet_active_user");
                   signOut();
                 }}
                 className="flex w-full items-center justify-start gap-3 rounded-md px-3 py-2.5 text-sm font-semibold hover:bg-muted"
@@ -114,7 +121,6 @@ export function AccountMenu() {
                 Sign out
               </Button>
             )}
-
 
             <div className="flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-semibold">
               <span>Appearance</span>

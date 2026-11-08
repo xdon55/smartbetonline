@@ -36,7 +36,11 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
         className,
       )}
     >
-      {dark ? <Sun className="h-[1.125rem] w-[1.125rem]" /> : <Moon className="h-[1.125rem] w-[1.125rem]" />}
+      {dark ? (
+        <Sun className="h-[1.125rem] w-[1.125rem]" />
+      ) : (
+        <Moon className="h-[1.125rem] w-[1.125rem]" />
+      )}
     </button>
   );
 }

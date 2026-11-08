@@ -2,31 +2,38 @@
  * search-dialog.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Header search. Clicking the icon opens a fullscreen top search bar with a
- * back arrow and live results over the mock fixtures (teams, leagues,
- * countries). Results link to the match detail page. When a real feed is
- * connected, swap the local filter for a search API call.
+ * back arrow and live results over real SmartBet fixtures (teams, leagues, countries).
+ * Results link to the match detail page.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Search, X } from "lucide-react";
-import { matches, flagFor } from "@/lib/betting-data";
+import { matches as fallbackMatches, flagFor } from "@/lib/betting-data";
+import { usePrematchGames } from "@/hooks/use-prematch-games";
+import { useLiveGames } from "@/hooks/use-live-games";
 
 export function SearchDialog() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
 
+  const { matches: prematchMatches } = usePrematchGames();
+  const { matches: liveMatches } = useLiveGames();
+
+  const allAvailableMatches = useMemo(() => {
+    const combined = [...liveMatches, ...prematchMatches];
+    return combined.length > 0 ? combined : fallbackMatches;
+  }, [liveMatches, prematchMatches]);
+
   const results = useMemo(() => {
     const term = q.trim().toLowerCase();
     if (!term) return [];
-    return matches
+    return allAvailableMatches
       .filter((m) =>
-        [m.home, m.away, m.league, m.country, m.sport].some((v) =>
-          v.toLowerCase().includes(term),
-        ),
+        [m.home, m.away, m.league, m.country, m.sport].some((v) => v.toLowerCase().includes(term)),
       )
-      .slice(0, 12);
-  }, [q]);
+      .slice(0, 15);
+  }, [q, allAvailableMatches]);
 
   const close = () => {
     setOpen(false);
@@ -64,7 +71,7 @@ export function SearchDialog() {
                   autoFocus
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="Team or league..."
+                  placeholder="Search team, league or country..."
                   className="min-w-0 flex-1 bg-transparent text-sm text-surface-foreground outline-none placeholder:text-surface-foreground/50"
                 />
                 {q && (
@@ -86,12 +93,12 @@ export function SearchDialog() {
             <div className="mx-auto max-w-2xl">
               {!q.trim() && (
                 <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  Start typing to find an event.
+                  Start typing to find a real event or league.
                 </p>
               )}
               {q.trim() && !results.length && (
                 <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  No events found for "{q}".
+                  No events found for &quot;{q}&quot;.
                 </p>
               )}
               {results.map((m) => (
@@ -106,7 +113,8 @@ export function SearchDialog() {
                     {m.home} v {m.away}
                   </p>
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {flagFor(m.country)} {m.country} · {m.league} · {m.startsAt}
+                    {flagFor(m.country)} {m.country} · {m.league} ·{" "}
+                    {m.live ? `Live ${m.live.minute}'` : m.startsAt}
                   </p>
                 </Link>
               ))}

@@ -19,7 +19,6 @@ import { z } from "zod";
 import { zodValidator } from "@tanstack/zod-adapter";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
-
 export type WalletTransaction = {
   id: string;
   type: string;
@@ -34,9 +33,10 @@ export type WalletTransaction = {
 };
 
 function mapTransaction(row: Record<string, unknown>): WalletTransaction {
-  const meta = row["metadata"] && typeof row["metadata"] === "object" && !Array.isArray(row["metadata"])
-    ? (row["metadata"] as Record<string, unknown>)
-    : {};
+  const meta =
+    row["metadata"] && typeof row["metadata"] === "object" && !Array.isArray(row["metadata"])
+      ? (row["metadata"] as Record<string, unknown>)
+      : {};
 
   const metadata: Record<string, string | number | boolean | null> = {};
   for (const [k, v] of Object.entries(meta)) {
@@ -60,9 +60,6 @@ function mapTransaction(row: Record<string, unknown>): WalletTransaction {
   };
 }
 
-
-
-
 /**
  * Return the derived wallet balance for the signed-in user.
  * Balance is computed from ledger entries so it is always consistent with the
@@ -83,18 +80,14 @@ export const getWalletBalance = createServerFn({ method: "GET" })
  */
 export const getWalletTransactions = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .validator(
-    (input: { cursor?: string; limit?: number }) =>
-      z
-        .object({
-          cursor: z.string().uuid().optional(),
-          limit: z.number().int().min(1).max(100).optional(),
-        })
-        .parse(input),
+  .validator((input: { cursor?: string; limit?: number }) =>
+    z
+      .object({
+        cursor: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      })
+      .parse(input),
   )
-
-
-
 
   .handler(async ({ context, data }) => {
     const { supabase, userId } = context;
@@ -106,7 +99,6 @@ export const getWalletTransactions = createServerFn({ method: "GET" })
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(limit);
-
 
     if (data.cursor) {
       // Cursor-based pagination using the created_at timestamp of the cursor row.
@@ -124,7 +116,6 @@ export const getWalletTransactions = createServerFn({ method: "GET" })
     if (error) throw new Error(error.message);
     return (rows ?? []).map(mapTransaction);
   });
-
 
 /**
  * Internal test deposit: credits the wallet without an external provider.

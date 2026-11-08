@@ -11,7 +11,8 @@ export const Route = createFileRoute("/aviator")({
       { title: "Aviator · SMARTBET" },
       {
         name: "description",
-        content: "Cash out before the plane flies away. Play Aviator and other flight games in UGX at SMARTBET.",
+        content:
+          "Cash out before the plane flies away. Play Aviator and other flight games in UGX at SMARTBET.",
       },
       { property: "og:title", content: "Aviator · SMARTBET" },
       {
@@ -21,10 +22,6 @@ export const Route = createFileRoute("/aviator")({
     ],
   }),
   component: () => (
-    <GameLobby
-      category="aviator"
-      title="Aviator"
-      tagline="Cash out before the plane flies away."
-    />
+    <GameLobby category="aviator" title="Aviator" tagline="Cash out before the plane flies away." />
   ),
 });

@@ -148,7 +148,9 @@
     color: var(--color-foreground);
     font-family: var(--font-sans);
     -webkit-tap-highlight-color: transparent;
-    font-feature-settings: "tnum" 1, "ss01" 1;
+    font-feature-settings:
+      "tnum" 1,
+      "ss01" 1;
   }
 
   h1,

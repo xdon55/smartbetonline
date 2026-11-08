@@ -66,11 +66,9 @@ export const getCurrentUserProfile = createServerFn({ method: "GET" })
     } = await supabaseAdmin.auth.admin.getUserById(userId);
     const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
 
-    const displayName =
-      typeof meta.display_name === "string" ? meta.display_name : null;
+    const displayName = typeof meta.display_name === "string" ? meta.display_name : null;
     const phone = typeof meta.phone === "string" ? meta.phone : null;
-    const dateOfBirth =
-      typeof meta.date_of_birth === "string" ? meta.date_of_birth : null;
+    const dateOfBirth = typeof meta.date_of_birth === "string" ? meta.date_of_birth : null;
 
     // Create profile and wallet in one go.
     const { data: profile, error: profileError } = await supabaseAdmin

@@ -2,9 +2,8 @@
  * hooks/use-wallet.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Fetches the signed-in user's wallet balance and recent transaction history.
- * Refreshes automatically when the user changes and exposes a manual refresh
- * callback so form submissions can update the displayed balance without a full
- * page reload.
+ * Supports both SmartBet Online UserInfo API (GET /api/Online/UserInfo)
+ * and internal PostgreSQL ledger entries via Supabase.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useEffect, useState, useCallback } from "react";
@@ -14,6 +13,7 @@ import {
   type WalletTransaction,
 } from "@/modules/wallet/wallet.functions";
 import { useAuth } from "./use-auth";
+import { smartBetApi } from "@/lib/api-smartbet";
 
 export function useWallet() {
   const { isAuthenticated, user } = useAuth();
@@ -29,18 +29,48 @@ export function useWallet() {
     setLoading(true);
 
     async function load() {
+      // 1. First check SmartBet Online UserInfo API
+      try {
+        const userInfo = await smartBetApi.getUserInfo();
+        if (mounted && userInfo && typeof userInfo.Balance === "number") {
+          setBalance(userInfo.Balance);
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // User not logged into SmartBet session or API offline
+      }
+
+      // 2. Check Supabase internal ledger balance if authenticated
       if (!isAuthenticated || !user) {
+        // Check if there is an active local user session
+        const storedUser = localStorage.getItem("smartbet_active_user");
+        if (storedUser) {
+          try {
+            const parsed = JSON.parse(storedUser);
+            if (typeof parsed.Balance === "number") {
+              setBalance(parsed.Balance);
+              setLoading(false);
+              return;
+            }
+          } catch {
+            // Ignore parse error
+          }
+        }
         setBalance(null);
         setTransactions([]);
         setLoading(false);
         return;
       }
+
       try {
-        // Balance is derived from ledger_entries by the wallet_balance RPC.
-        // Transaction history is paginated; default to the most recent 50 rows.
         const [bal, txs] = await Promise.all([
           getWalletBalance(),
-          (getWalletTransactions as any)({ data: {} }),
+          (
+            getWalletTransactions as unknown as (args: {
+              data?: { cursor?: string; limit?: number };
+            }) => Promise<WalletTransaction[]>
+          )({ data: {} }),
         ]);
 
         if (mounted) {
@@ -48,7 +78,7 @@ export function useWallet() {
           setTransactions(txs);
         }
       } catch (e) {
-        console.error("Wallet load failed", e);
+        console.warn("Wallet ledger load fallback:", e);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -58,7 +88,7 @@ export function useWallet() {
     return () => {
       mounted = false;
     };
-  }, [isAuthenticated, user?.id, refreshKey]);
+  }, [isAuthenticated, user, refreshKey]);
 
   return { balance, transactions, loading, refresh };
 }

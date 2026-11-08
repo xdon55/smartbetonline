@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package bet720_protocol_buffers;
+
+import "odd.proto";
+
+message Market {
+    // plain fields
+    int32 b              = 1;
+    int32 r              = 2;
+    string n             = 3;
+    optional float h     = 4; 
+
+    // reference structures
+    // lists
+    repeated Odd o      = 101;
+}

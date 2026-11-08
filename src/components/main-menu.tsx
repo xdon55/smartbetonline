@@ -8,7 +8,17 @@
  */
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, Dice5, Gamepad2, Menu, Plane, Radio, Rocket, Spade, Trophy } from "lucide-react";
+import {
+  ChevronDown,
+  Dice5,
+  Gamepad2,
+  Menu,
+  Plane,
+  Radio,
+  Rocket,
+  Spade,
+  Trophy,
+} from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { countriesWithLeagues, flagFor } from "@/lib/betting-data";
 
@@ -47,7 +57,9 @@ export function MainMenu() {
       <SheetContent side="left" className="w-80 overflow-y-auto p-0">
         <SheetHeader className="border-b border-border px-4 py-3 flex flex-row items-center justify-start">
           <SheetTitle className="font-display text-lg font-bold uppercase tracking-wide text-foreground">
-            <Link to="/" onClick={() => setOpen(false)} className="hover:opacity-90">SMARTBET</Link>
+            <Link to="/" onClick={() => setOpen(false)} className="hover:opacity-90">
+              SMARTBET
+            </Link>
           </SheetTitle>
         </SheetHeader>
 
@@ -107,7 +119,7 @@ export function MainMenu() {
                       <li key={l}>
                         <Link
                           to="/sports"
-                          
+
                           onClick={() => setOpen(false)}
                           className="block rounded px-2 py-1.5 text-sm text-muted-foreground hover:text-foreground"
                         >

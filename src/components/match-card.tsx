@@ -27,31 +27,32 @@ export function MatchCard({ match, marketId }: { match: Match; marketId?: string
             {match.live.minute}&apos;
           </span>
         ) : (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">{match.startsAt}</span>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+            {match.startsAt}
+          </span>
         )}
-          <span className="ml-auto font-medium opacity-80">{main.name}</span>
+        <span className="ml-auto font-medium opacity-80">{main.name}</span>
       </div>
 
-      <Link
-        to="/match/$matchId"
-        params={{ matchId: match.id }}
-        className="flex items-start gap-3"
-      >
+      <Link to="/match/$matchId" params={{ matchId: match.id }} className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
             <p className="truncate text-sm font-bold text-card-foreground">{match.home}</p>
-            {match.live && <span className="text-sm font-bold tabular-nums">{match.live.homeScore}</span>}
+            {match.live && (
+              <span className="text-sm font-bold tabular-nums">{match.live.homeScore}</span>
+            )}
           </div>
           <div className="flex items-center justify-between gap-2">
             <p className="truncate text-sm font-bold text-card-foreground">{match.away}</p>
-            {match.live && <span className="text-sm font-bold tabular-nums">{match.live.awayScore}</span>}
+            {match.live && (
+              <span className="text-sm font-bold tabular-nums">{match.live.awayScore}</span>
+            )}
           </div>
           <p className="mt-1.5 truncate text-[10px] font-medium text-muted-foreground">
             {flagFor(match.country)} {match.country} · {match.league}
           </p>
         </div>
       </Link>
-
 
       <div className="mt-3 flex items-stretch gap-2">
         <div
@@ -60,6 +61,23 @@ export function MatchCard({ match, marketId }: { match: Match; marketId?: string
           {main.outcomes.map((o) => {
             const id = `${match.id}-${main.id}-${o.id}`;
             const active = has(id);
+            const isLocked = Boolean(o.locked || o.odds <= 0);
+
+            if (isLocked) {
+              return (
+                <div
+                  key={o.id}
+                  title="Odds temporarily locked by bookmaker"
+                  className="flex h-12 flex-col items-center justify-center rounded-md border border-border/50 bg-muted/30 text-muted-foreground"
+                >
+                  <span className="text-[10px] font-semibold uppercase opacity-70">{o.label}</span>
+                  <span className="flex items-center gap-0.5 text-[11px] font-semibold text-muted-foreground/80">
+                    <span className="text-[10px]">🔒</span> Locked
+                  </span>
+                </div>
+              );
+            }
+
             return (
               <button
                 key={o.id}
@@ -72,6 +90,10 @@ export function MatchCard({ match, marketId }: { match: Match; marketId?: string
                     market: main.name,
                     pick: o.label,
                     odds: o.odds,
+                    betCategory: o.betCategory || main.id,
+                    matchOddId: o.matchOddId,
+                    bookMakerId: o.bookMakerId,
+                    isLive: Boolean(match.live),
                   })
                 }
                 className={`flex h-12 flex-col items-center justify-center rounded-md border text-sm font-bold tabular-nums transition-all ${

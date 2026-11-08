@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package bet720_protocol_buffers;
+
+message Odd {
+    int32 b             = 1;
+    float v             = 2;
+    float lv            = 3;
+    string n            = 4;
+}

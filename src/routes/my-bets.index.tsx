@@ -1,14 +1,16 @@
 /**
  * routes/my-bets.index.tsx — MY BETS list.
  * Collapsed receipt cards (stake, total odds, potential, status) with an
- * Open/Settled filter. Tapping a receipt opens the detail page at
- * /my-bets/$betId. Data comes from the bet slip context (seeded mock bets).
+ * Open/Settled filter. Integrated with SmartBet Online MyBets API:
+ * - GET /api/Online/MyBets
+ * - Local ticket persistence and Supabase synchronization
  */
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
-import { ChevronRight, Receipt } from "lucide-react";
-import { useBetSlip } from "@/lib/betslip";
+import { useEffect, useState } from "react";
+import { ChevronRight, Receipt, RotateCw } from "lucide-react";
+import { useBetSlip, type PlacedBet } from "@/lib/betslip";
 import { formatUgx } from "@/lib/betting-data";
+import { smartBetApi } from "@/lib/api-smartbet";
 
 export const Route = createFileRoute("/my-bets/")({
   head: () => ({
@@ -16,7 +18,8 @@ export const Route = createFileRoute("/my-bets/")({
       { title: "My bets · SMARTBET" },
       {
         name: "description",
-        content: "Track open and settled bets with booking codes, stakes and potential payouts in UGX.",
+        content:
+          "Track open and settled bets with booking codes, stakes and potential payouts in UGX.",
       },
       { property: "og:title", content: "My bets · SMARTBET" },
       {
@@ -40,14 +43,78 @@ const filters = [
 ] as const;
 
 function MyBets() {
-  const { bets } = useBetSlip();
+  const { bets: localBets } = useBetSlip();
   const [filter, setFilter] = useState<"open" | "settled">("open");
+  const [remoteBets, setRemoteBets] = useState<PlacedBet[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const visible = bets.filter((b) => (filter === "open" ? b.status === "open" : b.status !== "open"));
+  async function loadRemoteBets() {
+    setLoading(true);
+    try {
+      const serverRows = (await smartBetApi.getMyBets()) as Array<{
+        ReceiptId?: string | number;
+        BookingCode?: string;
+        Stake?: number;
+        Odds?: number;
+        Payout?: number;
+        Status?: string;
+        Date?: string;
+      }>;
+
+      if (Array.isArray(serverRows) && serverRows.length > 0) {
+        const adapted: PlacedBet[] = serverRows.map((row) => ({
+          id: String(row.ReceiptId || row.BookingCode || Math.random()),
+          code: String(row.BookingCode || row.ReceiptId || "SB-REC"),
+          placedAt: row.Date || "Recent",
+          stake: row.Stake || 1000,
+          totalOdds: row.Odds || 2.0,
+          potential: row.Payout || 2000,
+          status: (row.Status?.toLowerCase() === "won"
+            ? "won"
+            : row.Status?.toLowerCase() === "lost"
+              ? "lost"
+              : "open") as "open" | "won" | "lost",
+          selections: [],
+        }));
+        setRemoteBets(adapted);
+      }
+    } catch {
+      // Offline fallback
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadRemoteBets();
+  }, []);
+
+  const combinedBets = [...localBets];
+  // Merge remote bets not already in local
+  for (const rb of remoteBets) {
+    if (!combinedBets.some((b) => b.code === rb.code || b.id === rb.id)) {
+      combinedBets.push(rb);
+    }
+  }
+
+  const visible = combinedBets.filter((b) =>
+    filter === "open" ? b.status === "open" : b.status !== "open",
+  );
 
   return (
     <main className="mx-auto max-w-3xl px-3 py-4">
-      <h1 className="mb-3 font-display text-xl font-bold uppercase tracking-wide">My bets</h1>
+      <div className="mb-3 flex items-center justify-between">
+        <h1 className="font-display text-xl font-bold uppercase tracking-wide">My bets</h1>
+        <button
+          type="button"
+          onClick={loadRemoteBets}
+          disabled={loading}
+          aria-label="Refresh bets"
+          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+        >
+          <RotateCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+        </button>
+      </div>
 
       <div className="mb-3 grid grid-cols-2 gap-1 rounded-lg bg-secondary p-1">
         {filters.map((f) => (
@@ -85,27 +152,27 @@ function MyBets() {
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-xs font-bold">{bet.code}</span>
                   <span
-                    className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${statusStyles[bet.status]}`}
+                    className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
+                      statusStyles[bet.status] || statusStyles["open"]
+                    }`}
                   >
                     {bet.status}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {bet.selections.length} selection{bet.selections.length > 1 ? "s" : ""} ·{" "}
+                  {bet.selections.length > 0 ? `${bet.selections.length} selections · ` : ""}
                   {bet.placedAt}
                 </p>
               </div>
+
               <div className="text-right">
-                <p className="text-[10px] uppercase text-muted-foreground">Total odds</p>
-                <p className="text-sm font-bold tabular-nums text-accent">
-                  {bet.totalOdds.toFixed(2)}
+                <p className="text-[11px] text-muted-foreground">Stake {formatUgx(bet.stake)}</p>
+                <p className="font-mono text-sm font-bold tabular-nums text-foreground">
+                  {formatUgx(bet.potential)}
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase text-muted-foreground">Stake</p>
-                <p className="text-sm font-bold tabular-nums">{formatUgx(bet.stake)}</p>
-              </div>
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
             </Link>
           ))}
         </div>
