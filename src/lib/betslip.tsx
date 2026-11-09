@@ -134,29 +134,33 @@ const initialBets: PlacedBet[] = [
 
 /** Provider mounted once in src/routes/__root.tsx around the whole app. */
 export function BetSlipProvider({ children }: { children: ReactNode }) {
-  const [selections, setSelections] = useState<Selection[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_SLIP);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
+  const [selections, setSelections] = useState<Selection[]>([]);
   const [stake, setStake] = useState(2000); // default stake in UGX
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [bets, setBets] = useState<PlacedBet[]>(initialBets);
 
-  const [bets, setBets] = useState<PlacedBet[]>(() => {
-    if (typeof window === "undefined") return initialBets;
+  // Load from localStorage after mount to prevent SSR hydration mismatch
+  useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_BETS);
-      return saved ? JSON.parse(saved) : initialBets;
+      const savedSlip = localStorage.getItem(STORAGE_KEY_SLIP);
+      if (savedSlip) {
+        const parsed = JSON.parse(savedSlip);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setSelections(parsed);
+        }
+      }
+      const savedBets = localStorage.getItem(STORAGE_KEY_BETS);
+      if (savedBets) {
+        const parsedBets = JSON.parse(savedBets);
+        if (Array.isArray(parsedBets) && parsedBets.length > 0) {
+          setBets(parsedBets);
+        }
+      }
     } catch {
-      return initialBets;
+      // Ignore
     }
-  });
+  }, []);
 
   // Sync draft slip to localStorage
   useEffect(() => {

@@ -79,8 +79,8 @@ export function usePrematchGames() {
 
   useEffect(() => {
     fetchGames();
-    // Feed refreshes periodically (~15 minutes as per doc)
-    const interval = setInterval(() => fetchGames(true), 15 * 60 * 1000);
+    // Auto-refresh prematch odds and games every 60 seconds in the background
+    const interval = setInterval(() => fetchGames(true), 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchGames]);
 

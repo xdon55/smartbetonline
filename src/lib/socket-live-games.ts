@@ -121,6 +121,8 @@ class LiveGamesSocketManager {
   private statusListeners = new Set<StatusListener>();
   private eventType: protobuf.Type | null = null;
 
+  private clockInterval: ReturnType<typeof setInterval> | null = null;
+
   constructor() {
     try {
       const root = protobuf.parse(PROTO_SCHEMA).root;
@@ -128,6 +130,29 @@ class LiveGamesSocketManager {
     } catch (err) {
       console.warn("[Live Socket] Protobuf schema initialization warning:", err);
     }
+    this.startClockTicker();
+  }
+
+  private startClockTicker() {
+    if (typeof window === "undefined" || this.clockInterval) return;
+    this.clockInterval = setInterval(() => {
+      let updated = false;
+      for (const [id, m] of this.liveMatchesMap.entries()) {
+        if (m.live && m.live.minute < 95) {
+          this.liveMatchesMap.set(id, {
+            ...m,
+            live: {
+              ...m.live,
+              minute: m.live.minute + 1,
+            },
+          });
+          updated = true;
+        }
+      }
+      if (updated) {
+        this.broadcastMatches();
+      }
+    }, 60000);
   }
 
   public init() {

@@ -10,6 +10,12 @@ import { useBetSlip } from "@/lib/betslip";
 import { BetSlip } from "@/components/bet-slip";
 import { usePrematchGames, getCachedMatchById } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 export const Route = createFileRoute("/match/$matchId")({
   head: ({ params }) => {
@@ -96,79 +102,98 @@ function MatchDetail() {
           </p>
         </section>
 
-        {markets.map((market) => (
-          <section
-            key={market.id}
-            className="overflow-hidden bg-card md:rounded-lg md:border md:border-border"
-          >
-            <p className="border-b border-border bg-secondary px-3 py-2 text-xs font-bold uppercase tracking-wide text-secondary-foreground">
-              {market.name}
-            </p>
-            <div
-              className={`grid gap-2 p-3 ${
-                market.outcomes.length === 2
-                  ? "grid-cols-2"
-                  : market.outcomes.length > 3
-                    ? "grid-cols-3"
-                    : "grid-cols-3"
-              }`}
-            >
-              {market.outcomes.map((o) => {
-                const id = `${match.id}-${market.id}-${o.id}`;
-                const active = has(id);
-                const isLocked = Boolean(o.locked || o.odds <= 0);
+        <Accordion type="multiple" defaultValue={["main", "goals"]} className="space-y-3">
+          {markets.map((market) => {
+            const cat =
+              market.id === "1x2" || market.id === "dnb" || market.id === "dc"
+                ? "Main Markets"
+                : market.id.includes("ou") || market.id === "btts"
+                  ? "Goals & Scoring"
+                  : market.id.includes("h1") || market.id.includes("half")
+                    ? "Halves"
+                    : "Specials & Other";
 
-                if (isLocked) {
-                  return (
-                    <div
-                      key={o.id}
-                      title="Odds temporarily locked by live bookmaker"
-                      className="flex h-12 flex-col items-center justify-center rounded-md border border-border/50 bg-muted/30 text-muted-foreground"
-                    >
-                      <span className="max-w-full truncate px-1 text-[10px] font-semibold uppercase opacity-70">
-                        {o.label}
-                      </span>
-                      <span className="flex items-center gap-0.5 text-[11px] font-semibold text-muted-foreground/80">
-                        <span className="text-[10px]">🔒</span> Locked
-                      </span>
-                    </div>
-                  );
-                }
-
-                return (
-                  <button
-                    key={o.id}
-                    type="button"
-                    onClick={() =>
-                      toggle({
-                        id,
-                        matchId: match.id,
-                        match: `${match.home} v ${match.away}`,
-                        market: market.name,
-                        pick: o.label,
-                        odds: o.odds,
-                        betCategory: o.betCategory,
-                        matchOddId: o.matchOddId,
-                        bookMakerId: o.bookMakerId,
-                        isLive: Boolean(match.live),
-                      })
-                    }
-                    className={`flex h-12 flex-col items-center justify-center rounded-md text-sm font-bold tabular-nums transition-colors ${
-                      active
-                        ? "bg-odds-active text-odds-active-foreground"
-                        : "bg-odds text-odds-foreground hover:bg-muted"
+            return (
+              <AccordionItem
+                key={market.id}
+                value={market.id}
+                className="overflow-hidden rounded-lg border border-border bg-card"
+              >
+                <AccordionTrigger className="bg-secondary px-3 py-2 text-xs font-bold uppercase tracking-wide text-secondary-foreground hover:no-underline">
+                  <span>{market.name}</span>
+                  <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                    ({cat})
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="p-3">
+                  <div
+                    className={`grid gap-2 ${
+                      market.outcomes.length === 2
+                        ? "grid-cols-2"
+                        : market.outcomes.length > 3
+                          ? "grid-cols-3"
+                          : "grid-cols-3"
                     }`}
                   >
-                    <span className="max-w-full truncate px-1 text-[10px] font-semibold uppercase opacity-70">
-                      {o.label}
-                    </span>
-                    {o.odds.toFixed(2)}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        ))}
+                    {market.outcomes.map((o) => {
+                      const id = `${match.id}-${market.id}-${o.id}`;
+                      const active = has(id);
+                      const isLocked = Boolean(o.locked || o.odds <= 0);
+
+                      if (isLocked) {
+                        return (
+                          <div
+                            key={o.id}
+                            title="Odds temporarily locked by live bookmaker"
+                            className="flex h-12 flex-col items-center justify-center rounded-md border border-border/50 bg-muted/30 text-muted-foreground"
+                          >
+                            <span className="max-w-full truncate px-1 text-[10px] font-semibold uppercase opacity-70">
+                              {o.label}
+                            </span>
+                            <span className="flex items-center gap-0.5 text-[11px] font-semibold text-muted-foreground/80">
+                              <span className="text-[10px]">🔒</span> Locked
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <button
+                          key={o.id}
+                          type="button"
+                          onClick={() =>
+                            toggle({
+                              id,
+                              matchId: match.id,
+                              match: `${match.home} v ${match.away}`,
+                              market: market.name,
+                              pick: o.label,
+                              odds: o.odds,
+                              betCategory: o.betCategory,
+                              matchOddId: o.matchOddId,
+                              bookMakerId: o.bookMakerId,
+                              isLive: Boolean(match.live),
+                            })
+                          }
+                          className={`flex h-12 flex-col items-center justify-center rounded-md text-sm font-bold tabular-nums transition-colors ${
+                            active
+                              ? "bg-odds-active text-odds-active-foreground"
+                              : "bg-odds text-odds-foreground hover:bg-muted"
+                          }`}
+                        >
+                          <span className="max-w-full truncate px-1 text-[10px] font-semibold uppercase opacity-70">
+                            {o.label}
+                          </span>
+                          {o.odds.toFixed(2)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            );
+          })}
+        </Accordion>
       </div>
 
       <BetSlip />

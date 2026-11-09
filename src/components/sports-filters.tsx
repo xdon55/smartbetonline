@@ -40,12 +40,21 @@ export function SportsFilters({
   showKickoff?: boolean;
   matchesList?: typeof matches;
 }) {
-  const activeMatches = matchesList && matchesList.length > 0 ? matchesList : matches;
+  const activeMatches =
+    Array.isArray(matchesList) && matchesList.length > 0
+      ? matchesList
+      : Array.isArray(matches)
+        ? matches
+        : [];
   const leagues = Array.from(
     new Set(
       activeMatches
-        .filter((m) => value.sport === "all" || m.sport.toLowerCase() === value.sport.toLowerCase())
-        .map((m) => m.league),
+        .filter(
+          (m) =>
+            m &&
+            (value.sport === "all" || (m.sport || "").toLowerCase() === value.sport.toLowerCase()),
+        )
+        .map((m) => m.league || "Unknown"),
     ),
   ).sort();
 
@@ -120,11 +129,24 @@ export function SportsFilters({
 }
 
 export function filterMatches(all: typeof matches, f: SportsFilterState) {
+  if (!Array.isArray(all)) return [];
   return all.filter((m) => {
-    if (f.sport !== "all" && m.sport.toLowerCase() !== f.sport.toLowerCase()) return false;
-    if (f.league !== "all" && m.league.toLowerCase() !== f.league.toLowerCase()) return false;
-    if (f.kickoff !== "all" && m.day !== f.kickoff) return false;
-    if (f.market !== "all" && !m.markets.some((mk) => mk.id === f.market)) return false;
+    if (!m) return false;
+    if (f.sport !== "all" && (m.sport || "").toLowerCase() !== f.sport.toLowerCase()) {
+      return false;
+    }
+    if (f.league !== "all" && (m.league || "").toLowerCase() !== f.league.toLowerCase()) {
+      return false;
+    }
+    if (f.kickoff !== "all" && m.day !== f.kickoff) {
+      return false;
+    }
+    if (
+      f.market !== "all" &&
+      (!Array.isArray(m.markets) || !m.markets.some((mk) => mk.id === f.market))
+    ) {
+      return false;
+    }
     return true;
   });
 }
