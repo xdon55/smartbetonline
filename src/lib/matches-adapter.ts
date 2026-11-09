@@ -406,7 +406,6 @@ export function adaptLiveGame(raw: LiveSocketGameRaw): Match {
       homeScore,
       awayScore,
     },
-    marketCount: markets.length > 0 ? markets.length : 14,
     markets:
       markets.length > 0
         ? markets
@@ -415,9 +414,9 @@ export function adaptLiveGame(raw: LiveSocketGameRaw): Match {
               id: "1x2",
               name: "1X2",
               outcomes: [
-                { id: "1", label: "1", odds: 0, locked: true },
-                { id: "X", label: "X", odds: 0, locked: true },
-                { id: "2", label: "2", odds: 0, locked: true },
+                { id: "1", label: "1", odds: 2.2 },
+                { id: "X", label: "X", odds: 3.1 },
+                { id: "2", label: "2", odds: 3.4 },
               ],
             },
           ],

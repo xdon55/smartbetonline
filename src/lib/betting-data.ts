@@ -450,6 +450,14 @@ export function detailMarkets(match: Match): Market[] {
       ],
     },
     {
+      id: "ou05",
+      name: "Total goals 0.5",
+      outcomes: [
+        { id: "Over", label: "Over", odds: 1.08, betCategory: "OU", line: "0.5" },
+        { id: "Under", label: "Under", odds: 7.5, betCategory: "OU", line: "0.5" },
+      ],
+    },
+    {
       id: "ou15",
       name: "Total goals 1.5",
       outcomes: [
@@ -466,11 +474,45 @@ export function detailMarkets(match: Match): Market[] {
       ],
     },
     {
+      id: "ou_h1_05",
+      name: "1st Half Total goals 0.5",
+      outcomes: [
+        { id: "Over", label: "Over", odds: 1.42, betCategory: "OU_H1", line: "0.5" },
+        { id: "Under", label: "Under", odds: 2.75, betCategory: "OU_H1", line: "0.5" },
+      ],
+    },
+    {
+      id: "ou_h1_15",
+      name: "1st Half Total goals 1.5",
+      outcomes: [
+        { id: "Over", label: "Over", odds: 2.65, betCategory: "OU_H1", line: "1.5" },
+        { id: "Under", label: "Under", odds: 1.42, betCategory: "OU_H1", line: "1.5" },
+      ],
+    },
+    {
       id: "dnb",
       name: "Draw no bet",
       outcomes: [
         { id: "1", label: match.home, odds: 1.72, betCategory: "DNB" },
         { id: "2", label: match.away, odds: 2.05, betCategory: "DNB" },
+      ],
+    },
+    {
+      id: "dc_h1",
+      name: "1st Half Double chance",
+      outcomes: [
+        { id: "1X", label: "1X", odds: 1.45, betCategory: "DC_H1" },
+        { id: "12", label: "12", odds: 1.35, betCategory: "DC_H1" },
+        { id: "X2", label: "X2", odds: 1.62, betCategory: "DC_H1" },
+      ],
+    },
+    {
+      id: "handicap",
+      name: "Handicap",
+      outcomes: [
+        { id: "1", label: `${match.home} (-1)`, odds: 3.2, betCategory: "HC" },
+        { id: "X", label: "Draw (-1)", odds: 3.6, betCategory: "HC" },
+        { id: "2", label: `${match.away} (+1)`, odds: 1.85, betCategory: "HC" },
       ],
     },
     {

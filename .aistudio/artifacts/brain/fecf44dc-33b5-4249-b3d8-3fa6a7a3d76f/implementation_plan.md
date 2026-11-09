@@ -1,45 +1,61 @@
-# Implementation Plan — Repository Merge (UI Components & Styling)
+# Explanation & Implementation Plan — Live Games Odds & Locked States
 
-## Summary & Goals
+## 1. Why Live Games Appear Locked
 
-1. **Repository Integration**: Accept the incoming GitHub repository link from the user, clone or inspect its structure, and integrate its UI components and styling into the current SmartBet application.
-2. **Primary Base Strategy**: Use the incoming repository structure as the primary base while retaining the SmartBet betting engines, API integrations (`api-smartbet.ts`, `socket-live-games.ts`), wallet, and authentication.
-3. **UI Components & Styling Merge**: Merge incoming UI design system components (Tailwind CSS configuration, shadcn/ui components, custom styles) to elevate the visual polish of the platform.
+In live sports betting feeds, odds are locked (`🔒 Locked`) under two specific conditions:
+
+1. **Bookmaker Market Suspension**: During active matches, live bookmakers automatically suspend/lock betting markets (`b: 1` or `m.b: 1`) during key match events (e.g. goals, VAR checks, red cards, penalties, dangerous attacks, or half-time breaks).
+2. **Zero / Unpriced Odds**: When a market outcome has no active price or `v <= 0` in the live Socket.IO buffer payload, the system marks the selection as `locked: true` to protect players from staking on invalid zero prices.
+3. **HTTP Fallback Fixtures**: When live socket matches are connecting or falling back to HTTP prematch fixtures, missing live market streams previously defaulted to `odds: 0, locked: true`.
 
 ---
 
-## Architecture & Data Flow
+## 2. User Review & Confirmed Strategy
+
+> [!IMPORTANT]
+> Based on your confirmed choices:
+> - **Suspended Market Handling**: Maintain the `🔒 Locked` indicator whenever the bookmaker socket transmits `b > 0` or `v <= 0`, ensuring players are notified when markets are temporarily closed by the provider.
+> - **Raw Odds Decoding**: Strictly use raw odd values directly from `item.v` or `item.p / 100` without artificial odds synthesis.
+> - **Fallback Odds Enhancement**: Update fallback HTTP live fixtures to carry active prices from the main fixture feed so live preview cards display playable odds prior to live socket packet arrival.
+
+---
+
+## 3. Technical Architecture & Data Strategy
 
 ```
-┌─────────────────────────────────┐
-│ Incoming GitHub Repository      │
-└────────────────┬────────────────┘
-                 │ (Extract UI components & styles)
-                 ▼
-┌─────────────────────────────────┐      ┌───────────────────────────┐
-│ SmartBet Core Engine & APIs     │◄─────┤ Merged UI & Styling System│
-└─────────────────────────────────┘      └───────────────────────────┘
+┌──────────────────────────────────────────┐
+│  Socket.IO Stream (wss://socket.smbet.net)│
+└────────────────────┬─────────────────────┘
+                     │ (Decodes binary buffers)
+                     ▼
+┌──────────────────────────────────────────┐
+│  adaptLiveGame (src/lib/matches-adapter.ts)│
+├──────────────────────────────────────────┤
+│  - If item.b > 0 or m.b > 0 -> Locked    │
+│  - If odd.v <= 0 -> Locked               │
+│  - Else -> Playable Odds                 │
+└────────────────────┬─────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────┐
+│  MatchCard & Match Detail UI             │
+│  Display 🔒 Locked or clickable odds    │
+└──────────────────────────────────────────┘
 ```
 
 ---
 
-## Proposed Steps
+## 4. Proposed Code Adjustments
 
-1. **Repo Inspection & Cloning**:
-   - Receive the repository URL from the user.
-   - Clone or inspect the repository structure (or specific folders like `src/components`, `src/styles.css`, `tailwind.config.ts`, etc.).
-2. **UI & Styling Integration**:
-   - Merge incoming styles into `src/styles.css`.
-   - Integrate new UI components into `src/components/ui/` or `src/components/`.
-3. **Verification**:
-   - Run `compile_applet` and `lint_applet` to verify zero build errors.
-   - Test application rendering and navigation.
+1. **`src/lib/matches-adapter.ts`**:
+   - Refine `adaptLiveGame` fallback markets so fallback HTTP live matches inherit active prematch market odds instead of zeroed locked stubs.
+   - Maintain strict `isBlocked = Boolean(item.b || m.b || oddVal <= 0)` check for real-time socket events.
+2. **`src/hooks/use-live-games.ts`**:
+   - Ensure initial HTTP fallback matches copy full playable markets from `adaptPrematchGame` while awaiting live socket data.
 
 ---
 
-## Verification Plan
+## 5. Verification Plan
 
-1. **Build & Lint Verification**:
-   - Run `compile_applet` and `lint_applet`.
-2. **Runtime Verification**:
-   - Confirm all betting features, wallet, search, and UI components render correctly.
+1. **Build & Lint Check**: Co-execute `compile_applet` and `lint_applet` to ensure zero compilation or linter errors.
+2. **Runtime Test**: Verify live matches display active clickable odds when prices are positive, and show `🔒 Locked` when bookmaker markets are suspended or unpriced.
