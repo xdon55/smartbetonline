@@ -17,7 +17,6 @@ import { useBetSlip } from "@/lib/betslip";
 import { BetSlip } from "@/components/bet-slip";
 import { usePrematchGames, getCachedMatchById } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
-import { MatchCommentaryWidget } from "@/components/match-commentary-widget";
 import {
   Accordion,
   AccordionContent,
@@ -451,13 +450,6 @@ function MatchDetail() {
             )}
           </p>
         </section>
-
-        <MatchCommentaryWidget
-          matchId={match.id}
-          homeTeam={match.home}
-          awayTeam={match.away}
-          currentMinute={match.live?.minute ?? 45}
-        />
 
         <Accordion type="multiple" defaultValue={defaultOpenMarkets} className="space-y-3">
           {sections.map((section) => (
