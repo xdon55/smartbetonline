@@ -14,6 +14,7 @@ import {
 } from "@/modules/wallet/wallet.functions";
 import { useAuth } from "./use-auth";
 import { smartBetApi } from "@/lib/api-smartbet";
+import { supabase } from "@/integrations/supabase/client";
 
 export function useWallet() {
   const { isAuthenticated, user } = useAuth();
@@ -64,17 +65,50 @@ export function useWallet() {
       }
 
       try {
-        const [bal, txs] = await Promise.all([
-          getWalletBalance(),
-          (
+        let bal: number | null = null;
+        let txs: WalletTransaction[] = [];
+
+        try {
+          bal = await getWalletBalance();
+          txs = await (
             getWalletTransactions as unknown as (args: {
               data?: { cursor?: string; limit?: number };
             }) => Promise<WalletTransaction[]>
-          )({ data: {} }),
-        ]);
+          )({ data: {} });
+        } catch {
+          // Fallback: Query Supabase transactions table directly
+          const { data: dbTxs } = await supabase
+            .from("transactions")
+            .select("*")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .limit(50);
+
+          if (dbTxs && dbTxs.length > 0) {
+            txs = dbTxs.map((row) => ({
+              id: row.id,
+              type: row.type,
+              status: row.status,
+              direction: row.direction,
+              amount: Number(row.amount),
+              currency: row.currency,
+              reference: row.reference,
+              metadata: (row.metadata || {}) as Record<string, string | number | boolean | null>,
+              created_at: row.created_at,
+            }));
+
+            // Compute balance from transactions
+            let computed = 0;
+            for (const t of txs) {
+              if (t.direction === "credit") computed += t.amount;
+              else if (t.direction === "debit") computed -= t.amount;
+            }
+            bal = Math.max(0, computed);
+          }
+        }
 
         if (mounted) {
-          setBalance(bal);
+          if (bal !== null) setBalance(bal);
           setTransactions(txs);
         }
       } catch (e) {

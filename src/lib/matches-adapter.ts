@@ -176,28 +176,29 @@ function groupMatchOddsIntoMarkets(oddsList: PrematchMatchOdd[]): Market[] {
     if (typeof odd.Odd !== "number" || odd.Odd <= 0) continue;
 
     const rawCategory = (odd.BetCategory || "").trim();
+    const upperCat = rawCategory.toUpperCase();
     const lineStr = odd.Line !== null && odd.Line !== undefined ? String(odd.Line).trim() : "";
 
     let marketId = rawCategory.toLowerCase();
     let marketName = rawCategory;
 
-    if (rawCategory === "1x2") {
+    if (upperCat === "1X2") {
       marketId = "1x2";
       marketName = "1X2";
-    } else if (rawCategory === "BTS") {
+    } else if (upperCat === "BTS" || upperCat === "BTTS") {
       marketId = "btts";
       marketName = "Both teams to score";
-    } else if (rawCategory === "DC") {
+    } else if (upperCat === "DC") {
       marketId = "dc";
       marketName = "Double chance";
-    } else if (rawCategory === "DNB") {
+    } else if (upperCat === "DNB") {
       marketId = "dnb";
       marketName = "Draw no bet";
-    } else if (rawCategory === "1x2_H1") {
+    } else if (upperCat === "1X2_H1") {
       marketId = "1x2_h1";
       marketName = "1st Half 1X2";
-    } else if (rawCategory === "OU") {
-      if (lineStr === "2.5") {
+    } else if (upperCat === "OU" || upperCat.startsWith("OU_") || upperCat === "TOTAL GOALS") {
+      if (lineStr === "2.5" || (!lineStr && upperCat === "OU")) {
         marketId = "ou25";
         marketName = "Total goals 2.5";
       } else if (lineStr === "1.5") {
@@ -207,8 +208,8 @@ function groupMatchOddsIntoMarkets(oddsList: PrematchMatchOdd[]): Market[] {
         marketId = "ou35";
         marketName = "Total goals 3.5";
       } else {
-        marketId = `ou_${lineStr.replace(".", "_")}`;
-        marketName = `Total goals ${lineStr}`;
+        marketId = `ou_${lineStr ? lineStr.replace(".", "_") : "2_5"}`;
+        marketName = `Total goals ${lineStr || "2.5"}`;
       }
     }
 
@@ -249,7 +250,6 @@ function groupMatchOddsIntoMarkets(oddsList: PrematchMatchOdd[]): Market[] {
   });
 
   // Prioritize primary markets in fixed display order:
-  // 1X2 always first, then Total goals 2.5, Both teams to score, Double chance, Draw no bet, etc.
   const PRIORITY_ORDER = ["1x2", "ou25", "btts", "dc", "dnb", "ou15", "ou35", "1x2_h1"];
   const sortedMarkets: Market[] = [];
 
@@ -299,20 +299,7 @@ export function adaptPrematchGame(game: PrematchGame): Match {
     day,
     popular,
     marketCount: markets.length > 0 ? markets.length : 18,
-    markets:
-      markets.length > 0
-        ? markets
-        : [
-            {
-              id: "1x2",
-              name: "1X2",
-              outcomes: [
-                { id: "1", label: "1", odds: 2.15 },
-                { id: "X", label: "X", odds: 3.25 },
-                { id: "2", label: "2", odds: 3.1 },
-              ],
-            },
-          ],
+    markets,
   };
 }
 
@@ -343,7 +330,7 @@ export interface LiveSocketGameRaw {
 /**
  * Adapts a LiveSocketGameRaw into a live Match.
  */
-export function adaptLiveGame(raw: LiveSocketGameRaw): Match {
+export function adaptLiveGame(raw: LiveSocketGameRaw, previousMatch?: Match): Match {
   let homeScore = 0;
   let awayScore = 0;
 
@@ -356,35 +343,120 @@ export function adaptLiveGame(raw: LiveSocketGameRaw): Match {
       homeScore = Number(raw.sc.goal[0]) || 0;
       awayScore = Number(raw.sc.goal[1]) || 0;
     }
+  } else if (previousMatch?.live) {
+    homeScore = previousMatch.live.homeScore;
+    awayScore = previousMatch.live.awayScore;
   }
 
   const { country, league } = parseCountryAndLeague(raw.inf);
 
-  const markets: Market[] = (raw.bt || []).map((m, idx) => {
+  const rawMarkets = raw.bt || [];
+  let markets: Market[] = rawMarkets.map((m, idx) => {
     const rawOdds = m.o || m.items || [];
+    const isMarketBlocked = Boolean(m.b && m.b > 0);
+
+    const rawName = (m.n || "").trim();
+    let marketName = rawName || "1X2";
+    let marketId = marketName.toLowerCase();
+
+    const upperName = rawName.toUpperCase();
+    if (upperName === "1X2" || upperName === "MAIN 1X2") {
+      marketId = "1x2";
+      marketName = "1X2";
+    } else if (upperName === "BTS" || upperName === "BTTS" || upperName === "BOTH TEAMS TO SCORE") {
+      marketId = "btts";
+      marketName = "Both teams to score";
+    } else if (upperName === "DC" || upperName === "DOUBLE CHANCE") {
+      marketId = "dc";
+      marketName = "Double chance";
+    } else if (upperName === "DNB" || upperName === "DRAW NO BET") {
+      marketId = "dnb";
+      marketName = "Draw no bet";
+    } else if (upperName === "1X2_H1" || upperName === "1ST HALF 1X2") {
+      marketId = "1x2_h1";
+      marketName = "1st Half 1X2";
+    } else if (upperName === "OU" || upperName === "OVER/UNDER" || upperName.startsWith("OU_")) {
+      const lineStr = m.h !== undefined && m.h !== null ? String(m.h) : "2.5";
+      marketId = `ou${lineStr.replace(".", "")}`;
+      marketName = `Total goals ${lineStr}`;
+    }
+
+    const prevMarket = previousMatch?.markets.find((pm) => pm.id === marketId);
+
+    const outcomes: Outcome[] = rawOdds.map((item, i) => {
+      let oddVal = 0;
+      if ("v" in item && typeof item.v === "number" && item.v > 0) {
+        oddVal = item.v;
+      } else if ("p" in item && typeof item.p === "number" && item.p > 0) {
+        oddVal = item.p > 50 ? item.p / 100 : item.p;
+      }
+
+      const isOutcomeBlocked = Boolean(item.b && item.b > 0);
+
+      // If missing in an incremental delta update, fall back to previous market outcome
+      if (oddVal <= 0 && prevMarket && !isMarketBlocked && !isOutcomeBlocked) {
+        const prevOutcome = prevMarket.outcomes.find(
+          (po) =>
+            po.id === String(item.id || item.n || i) || po.label === (item.n || String(i + 1)),
+        );
+        if (prevOutcome && prevOutcome.odds > 0) {
+          oddVal = prevOutcome.odds;
+        }
+      }
+
+      const locked = isMarketBlocked || isOutcomeBlocked || oddVal <= 0;
+
+      return {
+        id: String(item.id || item.n || i),
+        label: item.n || String(i + 1),
+        odds: oddVal > 0 ? Number(oddVal.toFixed(2)) : 0,
+        locked,
+        betCategory: m.n,
+      };
+    });
+
+    // Sort outcomes according to standard betting order
+    const order = OUTCOME_ORDER[marketId];
+    if (order) {
+      outcomes.sort((a, b) => {
+        const ia = order.indexOf(a.label);
+        const ib = order.indexOf(b.label);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
+        return a.label.localeCompare(b.label);
+      });
+    }
+
     return {
-      id: String(m.id || m.n || idx).toLowerCase(),
-      name: m.n || "1X2",
-      outcomes: rawOdds.map((item, i) => {
-        const oddVal =
-          "v" in item && typeof item.v === "number"
-            ? item.v
-            : "p" in item && typeof item.p === "number"
-              ? item.p / 100
-              : 0;
-        const isBlocked = Boolean(item.b || m.b || oddVal <= 0);
-        return {
-          id: String(item.id || item.n || i),
-          label: item.n || String(i + 1),
-          odds: oddVal > 0 ? Number(oddVal.toFixed(2)) : 0,
-          locked: isBlocked,
-          betCategory: m.n,
-        };
-      }),
+      id: marketId,
+      name: marketName,
+      outcomes,
     };
   });
 
-  let minute = 45;
+  // If new packet had no markets but previous match did, retain previous markets
+  if (markets.length === 0 && previousMatch && previousMatch.markets.length > 0) {
+    markets = previousMatch.markets;
+  }
+
+  // Sort markets to prioritize 1X2, OU 2.5, BTTS, DC, DNB
+  const PRIORITY_ORDER = ["1x2", "ou25", "btts", "dc", "dnb", "ou15", "ou35", "1x2_h1"];
+  const sortedMarkets: Market[] = [];
+  const marketMap = new Map(markets.map((m) => [m.id, m]));
+
+  for (const prioId of PRIORITY_ORDER) {
+    const m = marketMap.get(prioId);
+    if (m && m.outcomes.length > 0) {
+      sortedMarkets.push(m);
+      marketMap.delete(prioId);
+    }
+  }
+  marketMap.forEach((m) => {
+    if (m.outcomes.length > 0) sortedMarkets.push(m);
+  });
+
+  let minute = previousMatch?.live?.minute || 45;
   if (typeof raw.tss === "string" && raw.tss.includes(":")) {
     minute = parseInt(raw.tss.split(":")[0] ?? "45", 10) || 45;
   } else if (typeof raw.tm === "number" && raw.tm > 0) {
@@ -392,12 +464,12 @@ export function adaptLiveGame(raw: LiveSocketGameRaw): Match {
   }
 
   return {
-    id: String(raw.std || raw.cd || Math.random().toString(36).slice(2, 8)),
+    id: String(raw.std || raw.cd || previousMatch?.id || Math.random().toString(36).slice(2, 8)),
     sport: "Football",
-    league: league && league !== "Live" ? league : "Live In-Play",
-    country: country || "International",
-    home: raw.t1?.n || "Home FC",
-    away: raw.t2?.n || "Away FC",
+    league: league && league !== "Live" ? league : previousMatch?.league || "Live In-Play",
+    country: country || previousMatch?.country || "International",
+    home: raw.t1?.n || previousMatch?.home || "Home FC",
+    away: raw.t2?.n || previousMatch?.away || "Away FC",
     startsAt: "Live",
     day: "today",
     popular: true,
@@ -406,19 +478,7 @@ export function adaptLiveGame(raw: LiveSocketGameRaw): Match {
       homeScore,
       awayScore,
     },
-    markets:
-      markets.length > 0
-        ? markets
-        : [
-            {
-              id: "1x2",
-              name: "1X2",
-              outcomes: [
-                { id: "1", label: "1", odds: 2.2 },
-                { id: "X", label: "X", odds: 3.1 },
-                { id: "2", label: "2", odds: 3.4 },
-              ],
-            },
-          ],
+    marketCount: sortedMarkets.length > 0 ? sortedMarkets.length : 12,
+    markets: sortedMarkets,
   };
 }

@@ -20,6 +20,9 @@ import { usePrematchGames } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
 
 export const Route = createFileRoute("/sports")({
+  validateSearch: (search: Record<string, unknown>): { league?: string } => ({
+    league: typeof search.league === "string" ? search.league : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Sports betting · Today's football odds in UGX | SMARTBET" },
@@ -51,8 +54,12 @@ const tabs = [
 ];
 
 function Index() {
+  const { league: searchLeague } = Route.useSearch();
   const [tab, setTab] = useState("upcoming");
-  const [filters, setFilters] = useState<SportsFilterState>(defaultFilters);
+  const [filters, setFilters] = useState<SportsFilterState>(() => ({
+    ...defaultFilters,
+    league: searchLeague || "all",
+  }));
 
   const {
     matches: prematchMatches,
@@ -71,9 +78,43 @@ function Index() {
         : allPrematch.filter((m) => !m.live);
 
   const list = filterMatches(base, filters);
-  const [visibleLimit, setVisibleLimit] = useState(30);
-  const visibleList = list.slice(0, visibleLimit);
   const loading = tab === "live" ? loadingLive : loadingPrematch;
+  // Group matches by league/competition
+  type LeagueGroup = {
+    key: string;
+    league: string;
+    country: string;
+    matches: typeof list;
+  };
+
+  const leagueGroups: LeagueGroup[] = [];
+  const leagueMap = new Map<string, LeagueGroup>();
+
+  for (const m of list) {
+    const key = `${m.country}___${m.league}`;
+    let group = leagueMap.get(key);
+    if (!group) {
+      group = {
+        key,
+        league: m.league,
+        country: m.country,
+        matches: [],
+      };
+      leagueMap.set(key, group);
+      leagueGroups.push(group);
+    }
+    group.matches.push(m);
+  }
+
+  // Manage expanded state for sections: initially show top 5 games per league
+  const [expandedLeagues, setExpandedLeagues] = useState<Record<string, boolean>>({});
+
+  const toggleLeagueExpand = (key: string) => {
+    setExpandedLeagues((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
 
   return (
     <main className="relative mx-auto flex w-full max-w-[968px] gap-2 px-0 py-4 md:grid md:h-[calc(100vh-7.5rem)] md:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] md:overflow-hidden md:px-3 md:py-5">
@@ -100,7 +141,10 @@ function Index() {
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => setTab(t.id)}
+                  onClick={() => {
+                    setTab(t.id);
+                    setExpandedLeagues({});
+                  }}
                   className={`relative flex-1 px-3 py-3 font-display text-sm font-semibold transition-colors ${
                     tab === t.id
                       ? "border-b-2 border-accent text-foreground"
@@ -146,22 +190,64 @@ function Index() {
                 No matches found matching your filters.
               </div>
             ) : (
-              <>
-                {visibleList.map((m) => (
-                  <MatchCard key={m.id} match={m} marketId={filters.market} />
-                ))}
-                {visibleLimit < list.length && (
-                  <div className="flex justify-center p-4 border-t border-border">
-                    <button
-                      type="button"
-                      onClick={() => setVisibleLimit((v) => v + 30)}
-                      className="px-4 py-2 rounded-md bg-secondary text-xs font-semibold text-secondary-foreground hover:bg-muted transition-colors"
-                    >
-                      Show more ({visibleLimit} of {list.length} matches)
-                    </button>
-                  </div>
-                )}
-              </>
+              <div className="divide-y divide-border">
+                {leagueGroups.map((group) => {
+                  const isExpanded = Boolean(expandedLeagues[group.key]);
+                  const totalGames = group.matches.length;
+                  const hasExtra = totalGames > 4;
+                  const initialMatches = group.matches.slice(0, 4);
+                  const extraMatches = group.matches.slice(4);
+
+                  return (
+                    <section key={group.key} className="bg-card">
+                      <header className="flex items-center justify-between bg-muted/40 px-3 py-2 text-xs font-bold text-foreground">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span>⚽</span>
+                          <span className="truncate">
+                            {group.country} · {group.league}
+                          </span>
+                        </div>
+                        <span className="ml-2 shrink-0 font-mono text-[11px] text-muted-foreground">
+                          ({totalGames})
+                        </span>
+                      </header>
+
+                      <div>
+                        {initialMatches.map((m) => (
+                          <MatchCard key={m.id} match={m} marketId={filters.market} />
+                        ))}
+                      </div>
+
+                      {hasExtra && (
+                        <div
+                          className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${
+                            isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                          }`}
+                        >
+                          <div className="overflow-hidden">
+                            {extraMatches.map((m) => (
+                              <MatchCard key={m.id} match={m} marketId={filters.market} />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {hasExtra && (
+                        <div className="flex justify-center border-t border-border/60 bg-muted/20 px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleLeagueExpand(group.key)}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold text-accent transition-colors hover:text-accent/80 hover:underline"
+                          >
+                            <span>{isExpanded ? "Show less" : "See all"}</span>
+                            <span className="font-mono">({totalGames})</span>
+                          </button>
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
             )}
           </div>
         </section>

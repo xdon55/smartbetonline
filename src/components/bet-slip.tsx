@@ -11,7 +11,8 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useState } from "react";
-import { Trash2, X, Ticket, Copy } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Trash2, X, Ticket, Copy, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { useBetSlip } from "@/lib/betslip";
 import { formatUgx } from "@/lib/betting-data";
@@ -29,19 +30,79 @@ function SlipBody() {
     setStake,
     totalOdds,
     potentialWin,
+    bonusPercent,
+    bonusAmount,
+    totalReturnWithBonus,
     placeBetAsync,
     createBookingAsync,
+    loadBookingCode,
     loading,
+    settings,
   } = useBetSlip();
   const [bookingCode, setBookingCode] = useState<string | null>(null);
+  const [inputCode, setInputCode] = useState("");
+  const [loadingCode, setLoadingCode] = useState(false);
   const [actionPending, setActionPending] = useState(false);
+
+  const handleLoadCode = async (codeToLoad: string) => {
+    if (!codeToLoad.trim()) return;
+    setLoadingCode(true);
+    try {
+      const res = await loadBookingCode(codeToLoad);
+      toast.success(`Loaded ${res.count} selections with total odds @${res.totalOdds.toFixed(2)}`);
+      setInputCode("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load booking code");
+    } finally {
+      setLoadingCode(false);
+    }
+  };
 
   if (!selections.length) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-12 text-center">
-        <Ticket className="h-8 w-8 text-muted-foreground" />
-        <p className="text-[0.7rem] font-semibold">Your bet slip is empty</p>
-        <p className="text-[0.6rem] text-muted-foreground">Tap any odds to add a selection.</p>
+      <div className="flex h-full flex-col justify-between p-4 text-center">
+        <div className="flex flex-col items-center justify-center gap-2 py-8">
+          <Ticket className="h-8 w-8 text-muted-foreground" />
+          <p className="text-[0.75rem] font-bold">Your bet slip is empty</p>
+          <p className="text-[0.65rem] text-muted-foreground">
+            Tap any odds to add a selection, or load a saved booking code.
+          </p>
+          <Link
+            to="/my-bets"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/80 px-3 py-1.5 text-xs font-bold text-secondary-foreground transition-all hover:border-accent/60 hover:bg-secondary hover:text-foreground"
+          >
+            <Receipt className="h-3.5 w-3.5 text-accent" />
+            View my bets
+          </Link>
+        </div>
+
+        {/* Load Booking Code Widget */}
+        <div className="rounded-lg border border-border bg-secondary/40 p-3 text-left">
+          <label
+            htmlFor="empty-slip-code"
+            className="block text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground mb-1.5"
+          >
+            Load Booking Code
+          </label>
+          <div className="flex gap-1.5">
+            <input
+              id="empty-slip-code"
+              type="text"
+              value={inputCode}
+              onChange={(e) => setInputCode(e.target.value.toUpperCase())}
+              placeholder="e.g. SB7HQ21"
+              className="min-w-0 flex-1 rounded border border-input bg-card px-2.5 py-1.5 font-mono text-xs uppercase tracking-wider outline-none focus:ring-1 focus:ring-accent"
+            />
+            <button
+              type="button"
+              disabled={loadingCode || !inputCode.trim()}
+              onClick={() => handleLoadCode(inputCode)}
+              className="rounded bg-primary dark:bg-accent px-3 py-1.5 text-xs font-bold uppercase text-primary-foreground dark:text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {loadingCode ? "Loading..." : "Load"}
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -94,17 +155,41 @@ function SlipBody() {
           ))}
         </div>
 
-        <label className="flex items-center justify-between gap-3 rounded-md border border-input px-3 py-2">
-          <span className="text-[0.6rem] font-semibold text-muted-foreground">Stake (UGX)</span>
-          <input
-            type="number"
-            min={500}
-            step={500}
-            value={stake}
-            onChange={(e) => setStake(Number(e.target.value))}
-            className="w-28 bg-transparent text-right text-[0.7rem] font-bold tabular-nums outline-none"
-          />
-        </label>
+        <div className="space-y-1">
+          <label
+            className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 ${
+              stake < settings.MinStake || stake > settings.MaxStake
+                ? "border-destructive/60 bg-destructive/10"
+                : "border-input"
+            }`}
+          >
+            <span className="text-[0.6rem] font-semibold text-muted-foreground">Stake (UGX)</span>
+            <input
+              type="number"
+              min={settings.MinStake}
+              max={settings.MaxStake}
+              step={500}
+              value={stake}
+              onChange={(e) => setStake(Number(e.target.value))}
+              className="w-28 bg-transparent text-right text-[0.7rem] font-bold tabular-nums outline-none"
+            />
+          </label>
+          {stake < settings.MinStake && (
+            <p className="text-[0.55rem] font-semibold text-destructive">
+              Min stake is {formatUgx(settings.MinStake)}
+            </p>
+          )}
+          {stake > settings.MaxStake && (
+            <p className="text-[0.55rem] font-semibold text-destructive">
+              Max stake is {formatUgx(settings.MaxStake)}
+            </p>
+          )}
+          {totalReturnWithBonus > settings.MaxPayOut && (
+            <p className="text-[0.55rem] font-semibold text-destructive">
+              Max payout limit is {formatUgx(settings.MaxPayOut)}
+            </p>
+          )}
+        </div>
 
         <div className="flex items-center justify-between text-[0.6rem] font-semibold text-muted-foreground">
           <span>Total odds</span>
@@ -114,8 +199,24 @@ function SlipBody() {
         </div>
         <div className="flex items-center justify-between text-[0.6rem] font-semibold text-muted-foreground">
           <span>Potential win</span>
-          <span className="text-[0.7rem] font-bold tabular-nums text-accent">
+          <span className="text-[0.7rem] font-bold tabular-nums text-foreground">
             {formatUgx(potentialWin)}
+          </span>
+        </div>
+
+        {bonusPercent > 0 && (
+          <div className="flex items-center justify-between text-[0.6rem] font-semibold text-amber-500">
+            <span>Multi-bet Boost ({bonusPercent}%)</span>
+            <span className="text-[0.7rem] font-bold tabular-nums text-amber-500">
+              +{formatUgx(bonusAmount)}
+            </span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between text-[0.6rem] font-bold text-muted-foreground pt-1 border-t border-border">
+          <span>Total Return</span>
+          <span className="text-[0.75rem] font-black tabular-nums text-accent">
+            {formatUgx(totalReturnWithBonus)}
           </span>
         </div>
 
@@ -160,7 +261,13 @@ function SlipBody() {
 
         <button
           type="button"
-          disabled={actionPending || loading}
+          disabled={
+            actionPending ||
+            loading ||
+            stake < settings.MinStake ||
+            stake > settings.MaxStake ||
+            totalReturnWithBonus > settings.MaxPayOut
+          }
           onClick={async () => {
             setActionPending(true);
             try {
@@ -189,9 +296,6 @@ export function BetSlip() {
     <>
       {/* Desktop docked slip */}
       <aside className="no-scrollbar hidden h-full min-w-0 flex-col overflow-y-auto rounded-md border border-border bg-card shadow-[var(--shadow-card)] md:flex">
-        <div className="brand-gradient border-b border-surface-foreground/10 px-4 py-3 font-display text-[0.7rem] font-semibold text-surface-foreground">
-          Bet slip
-        </div>
         <div className="min-h-0 flex-1">
           <SlipBody />
         </div>

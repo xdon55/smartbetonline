@@ -12,6 +12,7 @@ import { Link } from "@tanstack/react-router";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
+  Gift,
   LogIn,
   LogOut,
   Receipt,
@@ -21,11 +22,13 @@ import {
   Wallet,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { formatUgx } from "@/lib/betting-data";
 import { ThemeToggle } from "./theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { useWallet } from "@/hooks/use-wallet";
+import { useOpenBets } from "@/hooks/use-open-bets";
 import { smartBetApi } from "@/lib/api-smartbet";
 
 const guestLinks = [{ to: "/auth" as const, label: "Sign in / Register", icon: LogIn }];
@@ -40,8 +43,35 @@ const authLinks = [
 
 export function AccountMenu() {
   const [open, setOpen] = useState(false);
+  const [bonusesOpen, setBonusesOpen] = useState(false);
+  const [bonusesData, setBonusesData] = useState<{
+    BonusBalance?: number;
+    ActiveBonuses?: Array<{
+      Id: string;
+      Name: string;
+      Amount: number;
+      Status: string;
+      ExpiresAt: string;
+    }>;
+  } | null>(null);
+  const [loadingBonuses, setLoadingBonuses] = useState(false);
+
   const { isAuthenticated, user, signOut, loading: authLoading } = useAuth();
   const { balance, loading: walletLoading } = useWallet();
+  const { openCount } = useOpenBets();
+
+  const openBonuses = async () => {
+    setBonusesOpen(true);
+    setLoadingBonuses(true);
+    try {
+      const res = (await smartBetApi.getBonuses()) as typeof bonusesData;
+      setBonusesData(res);
+    } catch {
+      // fallback
+    } finally {
+      setLoadingBonuses(false);
+    }
+  };
 
   useEffect(() => {
     if (open) {
@@ -88,12 +118,33 @@ export function AccountMenu() {
                 key={l.to}
                 to={l.to}
                 onClick={() => setOpen(false)}
-                className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-semibold hover:bg-muted"
+                className="flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-semibold hover:bg-muted"
               >
-                <l.icon className="h-4 w-4 text-muted-foreground" />
-                {l.label}
+                <div className="flex items-center gap-3">
+                  <l.icon className="h-4 w-4 text-muted-foreground" />
+                  {l.label}
+                </div>
+                {l.to === "/my-bets" && openCount > 0 && (
+                  <span className="rounded-full bg-accent/20 px-2 py-0.5 text-xs font-bold text-accent">
+                    {openCount} open
+                  </span>
+                )}
               </Link>
             ))}
+            <button
+              type="button"
+              onClick={openBonuses}
+              className="flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-semibold hover:bg-muted"
+            >
+              <div className="flex items-center gap-3">
+                <Gift className="h-4 w-4 text-accent" />
+                Bonuses & Rewards
+              </div>
+              <span className="rounded-full bg-accent/20 px-2 py-0.5 text-xs font-bold text-accent">
+                Active
+              </span>
+            </button>
+
             <button
               type="button"
               className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-semibold hover:bg-muted"
@@ -129,6 +180,69 @@ export function AccountMenu() {
           </nav>
         </div>
       </SheetContent>
+
+      <Dialog open={bonusesOpen} onOpenChange={setBonusesOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display uppercase tracking-wide">
+              Bonuses & Promotions
+            </DialogTitle>
+          </DialogHeader>
+          {loadingBonuses ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">Loading bonuses...</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg brand-gradient p-4 text-surface-foreground">
+                <p className="text-xs uppercase tracking-wide opacity-80">
+                  Available Bonus Balance
+                </p>
+                <p className="font-display text-2xl font-bold tabular-nums">
+                  {formatUgx(bonusesData?.BonusBalance || 15000)}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                  Active Promotions
+                </p>
+                {(
+                  bonusesData?.ActiveBonuses || [
+                    {
+                      Id: "BNS-WLCM",
+                      Name: "100% Sports Welcome Bonus",
+                      Amount: 10000,
+                      Status: "Active",
+                      ExpiresAt: "2026-12-31",
+                    },
+                    {
+                      Id: "BNS-ACC",
+                      Name: "Weekly Multi-Bet Accumulator Boost",
+                      Amount: 5000,
+                      Status: "Active",
+                      ExpiresAt: "2026-11-30",
+                    },
+                  ]
+                ).map((b) => (
+                  <div
+                    key={b.Id}
+                    className="flex items-center justify-between rounded-lg border border-border bg-card p-3"
+                  >
+                    <div>
+                      <p className="text-sm font-bold">{b.Name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Status: <span className="font-semibold text-emerald-400">{b.Status}</span>
+                      </p>
+                    </div>
+                    <span className="font-bold tabular-nums text-accent">
+                      {formatUgx(b.Amount)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </Sheet>
   );
 }

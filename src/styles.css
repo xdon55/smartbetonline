@@ -167,33 +167,46 @@
 @layer base {
   * {
     scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  *:hover {
     scrollbar-color: var(--color-accent) var(--color-secondary);
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
 
   ::-webkit-scrollbar-track {
-    background: var(--color-secondary);
+    background: transparent;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--color-accent);
-    border: 2px solid var(--color-secondary);
+    background: transparent;
+    border: 2px solid transparent;
     border-radius: 9999px;
   }
 
-  ::-webkit-scrollbar-thumb:hover {
+  *:hover::-webkit-scrollbar-track {
+    background: var(--color-secondary);
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    background: var(--color-accent);
+    border: 2px solid var(--color-secondary);
+  }
+
+  *:hover::-webkit-scrollbar-thumb:hover {
     background: var(--color-odds-active);
   }
 }
 
 @utility no-scrollbar {
-  scrollbar-width: none;
+  scrollbar-width: none !important;
   &::-webkit-scrollbar {
-    display: none;
+    display: none !important;
   }
 }
 
@@ -203,6 +216,7 @@
   &::-webkit-scrollbar-track,
   &::-webkit-scrollbar-thumb {
     background: transparent;
+    border-color: transparent;
   }
 
   &:hover {

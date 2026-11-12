@@ -15,48 +15,50 @@ import { useBetSlip } from "@/lib/betslip";
 
 export function MatchCard({ match, marketId }: { match: Match; marketId?: string }) {
   const { toggle, has } = useBetSlip();
-  const main = (marketId && match.markets.find((m) => m.id === marketId)) || match.markets[0];
+  const main =
+    (marketId && match.markets.find((m) => m.id === marketId)) ||
+    match.markets.find((m) => m.id === "1x2") ||
+    match.markets[0];
   if (!main) return null;
 
   return (
-    <article className="group border-b border-border bg-card px-4 py-4 transition-colors last:border-b-0 hover:bg-muted/30">
-      <div className="mb-2.5 flex items-center gap-2 text-[10px] font-semibold text-muted-foreground">
+    <article className="group border-b border-border bg-card px-3 py-2.5 transition-colors last:border-b-0 hover:bg-muted/30">
+      <div className="mb-1 flex items-center gap-2 text-[10px] font-semibold text-muted-foreground">
         {match.live ? (
-          <span className="inline-flex items-center gap-1 rounded bg-live px-1.5 py-0.5 text-live-foreground">
+          <span className="inline-flex items-center gap-1 rounded bg-live px-1.5 py-0.5 text-[10px] font-bold text-live-foreground">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-live-foreground" />
             {match.live.minute}&apos;
           </span>
         ) : (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {match.startsAt}
           </span>
         )}
-        <span className="ml-auto font-medium opacity-80">{main.name}</span>
       </div>
 
       <Link to="/match/$matchId" params={{ matchId: match.id }} className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <p className="truncate text-sm font-bold text-card-foreground">{match.home}</p>
+            <p className="truncate text-xs font-bold text-card-foreground">{match.home}</p>
             {match.live && (
-              <span className="text-sm font-bold tabular-nums">{match.live.homeScore}</span>
+              <span className="text-xs font-bold tabular-nums">{match.live.homeScore}</span>
             )}
           </div>
           <div className="flex items-center justify-between gap-2">
-            <p className="truncate text-sm font-bold text-card-foreground">{match.away}</p>
+            <p className="truncate text-xs font-bold text-card-foreground">{match.away}</p>
             {match.live && (
-              <span className="text-sm font-bold tabular-nums">{match.live.awayScore}</span>
+              <span className="text-xs font-bold tabular-nums">{match.live.awayScore}</span>
             )}
           </div>
-          <p className="mt-1.5 truncate text-[10px] font-medium text-muted-foreground">
+          <p className="mt-0.5 truncate text-[10px] font-medium text-muted-foreground">
             {flagFor(match.country)} {match.country} · {match.league}
           </p>
         </div>
       </Link>
 
-      <div className="mt-3 flex items-stretch gap-2">
+      <div className="mt-2 flex items-stretch gap-1.5">
         <div
-          className={`grid flex-1 gap-2 ${main.outcomes.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
+          className={`grid flex-1 gap-1.5 ${main.outcomes.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
         >
           {main.outcomes.map((o) => {
             const id = `${match.id}-${main.id}-${o.id}`;
@@ -68,11 +70,13 @@ export function MatchCard({ match, marketId }: { match: Match; marketId?: string
                 <div
                   key={o.id}
                   title="Odds temporarily locked by bookmaker"
-                  className="flex h-12 flex-col items-center justify-center rounded-md border border-border/50 bg-muted/30 text-muted-foreground"
+                  className="flex h-9 flex-col items-center justify-center rounded border border-border/50 bg-muted/30 px-1 text-muted-foreground"
                 >
-                  <span className="text-[10px] font-semibold uppercase opacity-70">{o.label}</span>
-                  <span className="flex items-center gap-0.5 text-[11px] font-semibold text-muted-foreground/80">
-                    <span className="text-[10px]">🔒</span> Locked
+                  <span className="text-[9px] font-semibold uppercase opacity-70 leading-tight truncate max-w-full">
+                    {o.label}
+                  </span>
+                  <span className="flex items-center gap-0.5 text-[10px] font-semibold text-muted-foreground/80 leading-none">
+                    <span className="text-[9px]">🔒</span> Locked
                   </span>
                 </div>
               );
@@ -96,14 +100,16 @@ export function MatchCard({ match, marketId }: { match: Match; marketId?: string
                     isLive: Boolean(match.live),
                   })
                 }
-                className={`flex h-12 flex-col items-center justify-center rounded-md border text-sm font-bold tabular-nums transition-all ${
+                className={`flex h-9 flex-col items-center justify-center rounded border px-1 text-xs font-bold tabular-nums transition-all ${
                   active
                     ? "border-odds-active bg-odds-active text-odds-active-foreground"
                     : "border-border bg-odds text-odds-foreground hover:border-accent/60 hover:bg-muted"
                 }`}
               >
-                <span className="text-[10px] font-semibold uppercase opacity-70">{o.label}</span>
-                {o.odds.toFixed(2)}
+                <span className="text-[9px] font-semibold uppercase opacity-70 leading-tight truncate max-w-full">
+                  {o.label}
+                </span>
+                <span className="leading-none">{o.odds.toFixed(2)}</span>
               </button>
             );
           })}
@@ -111,7 +117,7 @@ export function MatchCard({ match, marketId }: { match: Match; marketId?: string
         <Link
           to="/match/$matchId"
           params={{ matchId: match.id }}
-          className="flex h-12 w-14 items-center justify-center gap-0.5 rounded-md border border-border bg-secondary text-xs font-semibold text-secondary-foreground transition-colors hover:border-accent/60"
+          className="flex h-9 w-12 items-center justify-center gap-0.5 rounded border border-border bg-secondary text-[11px] font-semibold text-secondary-foreground transition-colors hover:border-accent/60"
         >
           +{match.marketCount}
           <ChevronRight className="h-3 w-3" />

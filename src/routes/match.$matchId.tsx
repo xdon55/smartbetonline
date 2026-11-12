@@ -3,7 +3,7 @@
  * Header banner with fixture info plus the full market list from
  * real SmartBet feeds. Every outcome button toggles a bet slip selection.
  */
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import {
   matches as fallbackMatches,
@@ -17,6 +17,7 @@ import { useBetSlip } from "@/lib/betslip";
 import { BetSlip } from "@/components/bet-slip";
 import { usePrematchGames, getCachedMatchById } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
+import { MatchCommentaryWidget } from "@/components/match-commentary-widget";
 import {
   Accordion,
   AccordionContent,
@@ -115,7 +116,16 @@ function buildGoalLineGroups(markets: Market[]): GoalLineGroup[] {
 
 function MatchDetail() {
   const { matchId } = Route.useParams();
+  const navigate = useNavigate();
   const { toggle, has } = useBetSlip();
+
+  const handleBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate({ to: "/" });
+    }
+  };
 
   const { matches: prematchMatches, loading: loadingPrematch } = usePrematchGames();
   const { matches: liveMatches, loading: loadingLive } = useLiveGames();
@@ -143,9 +153,13 @@ function MatchDetail() {
     return (
       <main className="mx-auto max-w-md px-3 py-12 text-center">
         <p className="text-sm font-semibold">This event is no longer available.</p>
-        <Link to="/" className="mt-3 inline-block text-sm font-bold text-accent">
+        <button
+          type="button"
+          onClick={handleBack}
+          className="mt-3 inline-block text-sm font-bold text-accent cursor-pointer"
+        >
           Back to sports
-        </Link>
+        </button>
       </main>
     );
   }
@@ -339,13 +353,13 @@ function MatchDetail() {
         <div
           key={o.id}
           title="Odds temporarily locked by live bookmaker"
-          className="flex h-12 flex-col items-center justify-center rounded-md border border-border/50 bg-muted/30 text-muted-foreground"
+          className="flex h-10 flex-col items-center justify-center rounded-md border border-border/50 bg-muted/30 px-1 text-muted-foreground"
         >
-          <span className="max-w-full truncate px-1 text-[10px] font-semibold uppercase opacity-70">
+          <span className="max-w-full truncate px-1 text-[9px] font-semibold uppercase opacity-70">
             {o.label}
           </span>
-          <span className="flex items-center gap-0.5 text-[11px] font-semibold text-muted-foreground/80">
-            <span className="text-[10px]">🔒</span> Locked
+          <span className="flex items-center gap-0.5 text-[10px] font-semibold text-muted-foreground/80 leading-none">
+            <span className="text-[9px]">🔒</span> Locked
           </span>
         </div>
       );
@@ -369,16 +383,16 @@ function MatchDetail() {
             isLive: Boolean(match.live),
           })
         }
-        className={`flex h-12 flex-col items-center justify-center rounded-md text-sm font-bold tabular-nums transition-colors ${
+        className={`flex h-10 flex-col items-center justify-center rounded-md text-xs font-bold tabular-nums transition-colors ${
           active
             ? "bg-odds-active text-odds-active-foreground"
             : "bg-odds text-odds-foreground hover:bg-muted"
         }`}
       >
-        <span className="max-w-full truncate px-1 text-[10px] font-semibold uppercase opacity-70">
+        <span className="max-w-full truncate px-1 text-[9px] font-semibold uppercase opacity-70 leading-tight">
           {o.label}
         </span>
-        {o.odds.toFixed(2)}
+        <span className="leading-none">{o.odds.toFixed(2)}</span>
       </button>
     );
   };
@@ -392,18 +406,18 @@ function MatchDetail() {
       </div>
       {lines.map((gl) => (
         <div key={gl.line} className="grid grid-cols-[70px_1fr_1fr] items-center gap-2">
-          <div className="flex h-12 items-center justify-center rounded-md border border-border bg-muted/40 text-xs font-bold tabular-nums text-foreground">
+          <div className="flex h-10 items-center justify-center rounded-md border border-border bg-muted/40 text-xs font-bold tabular-nums text-foreground">
             {gl.line}
           </div>
           {gl.over ? (
             renderOutcomeBtn(gl.over.outcome, gl.over.marketId, gl.over.marketName)
           ) : (
-            <div className="h-12 rounded-md border border-border/50 bg-muted/20" />
+            <div className="h-10 rounded-md border border-border/50 bg-muted/20" />
           )}
           {gl.under ? (
             renderOutcomeBtn(gl.under.outcome, gl.under.marketId, gl.under.marketName)
           ) : (
-            <div className="h-12 rounded-md border border-border/50 bg-muted/20" />
+            <div className="h-10 rounded-md border border-border/50 bg-muted/20" />
           )}
         </div>
       ))}
@@ -414,12 +428,13 @@ function MatchDetail() {
     <main className="relative mx-auto flex w-full max-w-[968px] gap-2 px-0 py-3 md:grid md:h-[calc(100vh-7.5rem)] md:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] md:overflow-hidden md:px-3">
       <div className="no-scrollbar min-w-0 flex-1 space-y-3 md:h-full md:overflow-y-auto md:py-3">
         <section className="brand-gradient px-3 py-4 text-surface-foreground md:rounded-lg">
-          <Link
-            to="/"
-            className="mb-3 inline-flex items-center gap-1 text-xs font-semibold opacity-80"
+          <button
+            type="button"
+            onClick={handleBack}
+            className="mb-3 inline-flex items-center gap-1 text-xs font-semibold opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
           >
             <ArrowLeft className="h-3.5 w-3.5" /> Back
-          </Link>
+          </button>
           <p className="text-[11px] font-semibold uppercase tracking-wide opacity-80">
             {flagFor(match.country)} {match.country} · {match.league}
           </p>
@@ -436,6 +451,13 @@ function MatchDetail() {
             )}
           </p>
         </section>
+
+        <MatchCommentaryWidget
+          matchId={match.id}
+          homeTeam={match.home}
+          awayTeam={match.away}
+          currentMinute={match.live?.minute ?? 45}
+        />
 
         <Accordion type="multiple" defaultValue={defaultOpenMarkets} className="space-y-3">
           {sections.map((section) => (

@@ -38,11 +38,101 @@ const serverUsers = new Map<string, ProxySessionUser>([
   ],
 ]);
 
+export interface ServerTicketLeg {
+  id?: string;
+  matchId?: string | number;
+  match?: string;
+  market?: string;
+  pick?: string;
+  odds?: number;
+  betCategory?: string;
+  betOption?: string;
+  odd?: number;
+}
+
+export interface ServerTicket {
+  ReceiptId: string;
+  BookingCode: string;
+  Stake: number;
+  Odds: number;
+  Payout: number;
+  Status: string;
+  Date: string;
+  selections: ServerTicketLeg[];
+}
+
 const userSessions = new Map<string, ProxySessionUser>();
 const depositTransactions = new Map<
   string,
   { code: string; amount: number; phone: string; status: string; createdAt: string }
 >();
+
+const serverTicketsStore = new Map<string, ServerTicket[]>();
+
+const defaultDemoTickets: ServerTicket[] = [
+  {
+    ReceiptId: "9182931",
+    BookingCode: "SB-9182",
+    Stake: 5000,
+    Odds: 3.45,
+    Payout: 17250,
+    Status: "Open",
+    Date: new Date(Date.now() - 3600000).toISOString(),
+    selections: [
+      {
+        id: "leg-1",
+        matchId: "141029661",
+        match: "Vietnam v Chinese Taipei",
+        market: "1X2",
+        pick: "1",
+        odds: 1.11,
+      },
+      {
+        id: "leg-2",
+        matchId: "141025003",
+        match: "North Macedonia U19 v Northern Ireland U19",
+        market: "1X2",
+        pick: "X",
+        odds: 3.1,
+      },
+    ],
+  },
+  {
+    ReceiptId: "8741290",
+    BookingCode: "SB-8741",
+    Stake: 2000,
+    Odds: 4.85,
+    Payout: 9700,
+    Status: "Won",
+    Date: new Date(Date.now() - 86400000).toISOString(),
+    selections: [
+      {
+        id: "leg-3",
+        matchId: "141028150",
+        match: "Al Qanater v El Obour SC",
+        market: "Both teams to score",
+        pick: "Yes",
+        odds: 1.85,
+      },
+    ],
+  },
+];
+
+const globalTicketsList: ServerTicket[] = [...defaultDemoTickets];
+
+function getUserTickets(sessionId: string): ServerTicket[] {
+  const sessionList = serverTicketsStore.get(sessionId) || [];
+  const map = new Map<string, ServerTicket>();
+  for (const t of sessionList) {
+    map.set(t.ReceiptId, t);
+  }
+  for (const t of globalTicketsList) {
+    if (!map.has(t.ReceiptId)) {
+      map.set(t.ReceiptId, t);
+    }
+  }
+  return Array.from(map.values());
+}
 
 function jsonResponse(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -291,13 +381,9 @@ export async function handleApiProxy(request: Request): Promise<Response> {
       code,
       amount,
       phone,
-      status: "SUCCESSFUL",
+      status: "PENDING",
       createdAt: new Date().toISOString(),
     });
-
-    if (currentUser) {
-      currentUser.Balance += amount;
-    }
 
     return jsonResponse({
       code,
@@ -312,12 +398,27 @@ export async function handleApiProxy(request: Request): Promise<Response> {
   if (subpath.startsWith("/api/Online/DepositStatus/")) {
     const code = subpath.replace("/api/Online/DepositStatus/", "").trim();
     const tx = depositTransactions.get(code);
+
+    let currentStatus = "SUCCESSFUL";
+    if (tx) {
+      const elapsedMs = Date.now() - new Date(tx.createdAt).getTime();
+      // Keep PENDING for first 3.5 seconds to simulate telecom network prompt transit
+      if (elapsedMs < 3500) {
+        currentStatus = "PENDING";
+      } else {
+        tx.status = "SUCCESSFUL";
+        if (currentUser) {
+          currentUser.Balance += tx.amount;
+        }
+      }
+    }
+
     const amount = tx ? tx.amount : 10000;
-    const activeBalance = currentUser ? currentUser.Balance : 135000;
+    const activeBalance = currentUser ? currentUser.Balance : 145000;
 
     return jsonResponse({
       code,
-      status: "SUCCESSFUL",
+      status: currentStatus,
       amount,
       balance: activeBalance,
       updateTime: new Date().toISOString(),
@@ -329,15 +430,49 @@ export async function handleApiProxy(request: Request): Promise<Response> {
     const amount = Number(bodyJson?.["amount"]) || 5000;
     const requestId = String(bodyJson?.["requestId"] || `wdr-${Date.now()}`);
 
+    // Require SMS OTP verification challenge
+    const challengeId = `CH-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    return jsonResponse({
+      status: "OTP",
+      challengeId,
+      amount,
+      requestId,
+      message: "Security check: 6-digit confirmation code dispatched via SMS.",
+    });
+  }
+
+  // ── Route: /api/Online/ConfirmWithdrawAlt ──────────────────────────────────
+  if (subpath === "/api/Online/ConfirmWithdrawAlt" && request.method === "POST") {
+    const otpCode = String(bodyJson?.["otpCode"] || "").trim();
+
+    if (currentUser) {
+      currentUser.Balance = Math.max(0, currentUser.Balance - 5000);
+    }
+
+    return jsonResponse({
+      status: "SUCCESSFUL",
+      message: "Withdrawal verified. Payout dispatched to your Mobile Money account.",
+      transactionId: `TX-WDR-${Date.now().toString(36).toUpperCase()}`,
+      otpCode,
+    });
+  }
+
+  // ── Route: /api/Online/WithdrawAtBranch ────────────────────────────────────
+  if (subpath === "/api/Online/WithdrawAtBranch" && request.method === "POST") {
+    const amount = Number(bodyJson?.["amount"]) || 10000;
+    const code = `BR-${Math.floor(100000 + Math.random() * 900000)}`;
+
     if (currentUser) {
       currentUser.Balance = Math.max(0, currentUser.Balance - amount);
     }
 
     return jsonResponse({
-      status: "SUCCESSFUL",
-      transactionId: `TX-${requestId}`,
+      code,
       amount,
-      message: "Withdrawal approved. Funds sent to Mobile Money wallet.",
+      status: "APPROVED",
+      expiresIn: "48 hours",
+      message: "Branch pickup voucher generated. Present code and ID to cashier.",
     });
   }
 
@@ -354,16 +489,197 @@ export async function handleApiProxy(request: Request): Promise<Response> {
 
   // ── Route: /api/Ticket (Place Bet) ─────────────────────────────────────────
   if (subpath === "/api/Ticket" && request.method === "POST") {
-    const stake = Number(bodyJson?.["totalStake"]) || 1000;
-    if (currentUser && currentUser.Balance >= stake) {
-      currentUser.Balance -= stake;
+    const totalStake = Number(bodyJson?.["totalStake"]) || 1000;
+    const totalOdds = Number(bodyJson?.["totalOdds"]) || 2.0;
+    const totalBonus = Number(bodyJson?.["totalBonus"]) || 0;
+    const betData = Array.isArray(bodyJson?.["betData"]) ? bodyJson["betData"] : [];
+
+    const activeUser = currentUser || serverUsers.get("demo_user")!;
+    if (activeUser && activeUser.Balance >= totalStake) {
+      activeUser.Balance -= totalStake;
     }
+
     const receiptId = String(Math.floor(1000000 + Math.random() * 9000000));
+    const bookingCode = `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+    const calculatedPayout = Math.round(totalStake * totalOdds) + totalBonus;
+
+    const newTicket: ServerTicket = {
+      ReceiptId: receiptId,
+      BookingCode: bookingCode,
+      Stake: totalStake,
+      Odds: Number(totalOdds.toFixed(2)),
+      Payout: calculatedPayout,
+      Status: "Open",
+      Date: new Date().toISOString(),
+      selections: betData.map((leg: Record<string, unknown>, idx: number) => ({
+        id: `leg-${receiptId}-${idx}`,
+        matchId: String(leg.matchId || 123456),
+        match: String(leg.match || leg.matchName || `Match #${leg.matchId || 123456}`),
+        market: String(leg.market || leg.betCategory || "1X2"),
+        pick: String(leg.betOption || leg.pick || "1"),
+        odds: Number(leg.odd || leg.odds || 1.8),
+      })),
+    };
+
+    let sessionTickets = serverTicketsStore.get(sessionId);
+    if (!sessionTickets) {
+      sessionTickets = [];
+      serverTicketsStore.set(sessionId, sessionTickets);
+    }
+    if (!sessionTickets.some((t) => t.ReceiptId === newTicket.ReceiptId)) {
+      sessionTickets.unshift(newTicket);
+    }
+    if (!globalTicketsList.some((t) => t.ReceiptId === newTicket.ReceiptId)) {
+      globalTicketsList.unshift(newTicket);
+    }
+
     return jsonResponse({
       receiptId,
       ReceiptId: receiptId,
+      bookingCode,
+      BookingCode: bookingCode,
       success: true,
-      balance: currentUser ? currentUser.Balance : 85000,
+      balance: activeUser ? activeUser.Balance : 85000,
+    });
+  }
+
+  // ── Route: /api/Online/redeem ─────────────────────────────────────────────
+  if (subpath === "/api/Online/redeem" && request.method === "POST") {
+    const code = String(bodyJson?.["code"] || "")
+      .trim()
+      .toUpperCase();
+    if (!code) {
+      return jsonResponse({ error: "Please enter a valid voucher code." }, 400);
+    }
+
+    const redeemAmount = code.includes("50") ? 50000 : code.includes("10") ? 10000 : 25000;
+    if (currentUser) {
+      currentUser.Balance += redeemAmount;
+    }
+
+    return jsonResponse({
+      balance: currentUser ? currentUser.Balance : 100000,
+      amount: redeemAmount,
+      code,
+      message: `Voucher ${code} successfully redeemed. ${redeemAmount.toLocaleString()} UGX added to balance.`,
+    });
+  }
+
+  // ── Route: /api/Online/OpenBetsCount ───────────────────────────────────────
+  if (subpath === "/api/Online/OpenBetsCount" && request.method === "GET") {
+    const userTickets = getUserTickets(sessionId);
+    const count = userTickets.filter((t) => t.Status.toLowerCase() === "open").length;
+    return jsonResponse({ count });
+  }
+
+  // ── Route: /api/Online/MyBets ──────────────────────────────────────────────
+  if (subpath === "/api/Online/MyBets" && request.method === "GET") {
+    const userTickets = getUserTickets(sessionId);
+    return jsonResponse(userTickets);
+  }
+
+  // ── Route: /api/Account/Bonuses ───────────────────────────────────────────
+  if (subpath === "/api/Account/Bonuses" && request.method === "GET") {
+    return jsonResponse({
+      BonusBalance: currentUser?.BonusBalance || 15000,
+      ActiveBonuses: [
+        {
+          Id: "BNS-WLCM",
+          Name: "100% Sports Welcome Bonus",
+          Amount: 10000,
+          Status: "Active",
+          ExpiresAt: "2026-12-31T23:59:59Z",
+        },
+        {
+          Id: "BNS-ACC",
+          Name: "Weekly Multi-Bet Accumulator Boost",
+          Amount: 5000,
+          Status: "Active",
+          ExpiresAt: "2026-11-30T23:59:59Z",
+        },
+      ],
+    });
+  }
+
+  // ── Route: /api/Statement/User ────────────────────────────────────────────
+  if (subpath === "/api/Statement/User" && request.method === "GET") {
+    const activeBalance = currentUser ? currentUser.Balance : 125000;
+    return jsonResponse([
+      {
+        TransactionId: "ST-88129",
+        Date: new Date(Date.now() - 3600000).toISOString(),
+        Type: "Deposit",
+        Amount: 25000,
+        Balance: activeBalance,
+        Description: "MTN Mobile Money Deposit",
+      },
+      {
+        TransactionId: "ST-88114",
+        Date: new Date(Date.now() - 86400000).toISOString(),
+        Type: "Bet Stake",
+        Amount: -5000,
+        Balance: activeBalance - 25000,
+        Description: "Multi-Bet Ticket #SB9182",
+      },
+      {
+        TransactionId: "ST-88092",
+        Date: new Date(Date.now() - 172800000).toISOString(),
+        Type: "Payout",
+        Amount: 34500,
+        Balance: activeBalance - 20000,
+        Description: "Winnings credited: Ticket #SB8741",
+      },
+    ]);
+  }
+
+  // ── Route: /api/Receipt/GetById/:id ───────────────────────────────────────
+  if (subpath.startsWith("/api/Receipt/GetById/")) {
+    const id = subpath.replace("/api/Receipt/GetById/", "").trim();
+    const userTickets = getUserTickets(sessionId);
+    const found = userTickets.find((t) => t.ReceiptId === id || t.BookingCode === id);
+    if (found) {
+      return jsonResponse({
+        ReceiptId: found.ReceiptId,
+        BookingCode: found.BookingCode,
+        Status: found.Status,
+        TotalStake: found.Stake,
+        TotalOdds: found.Odds,
+        PotentialPayout: found.Payout,
+        Date: found.Date,
+      });
+    }
+    return jsonResponse({
+      ReceiptId: id,
+      BookingCode: id,
+      Status: "Open",
+      TotalStake: 2000,
+      TotalOdds: 4.85,
+      PotentialPayout: 9700,
+      Date: new Date().toISOString(),
+    });
+  }
+
+  // ── Route: /api/Bet/Receipt/:id ───────────────────────────────────────────
+  if (subpath.startsWith("/api/Bet/Receipt/")) {
+    const id = subpath.replace("/api/Bet/Receipt/", "").trim();
+    const userTickets = getUserTickets(sessionId);
+    const found = userTickets.find((t) => t.ReceiptId === id || t.BookingCode === id);
+    if (found && Array.isArray(found.selections) && found.selections.length > 0) {
+      return jsonResponse({
+        ReceiptId: found.ReceiptId,
+        selections: found.selections,
+      });
+    }
+    return jsonResponse({
+      ReceiptId: id,
+      selections: [
+        {
+          match: "Home FC v Away FC",
+          market: "1X2",
+          pick: "1",
+          odds: 2.1,
+        },
+      ],
     });
   }
 

@@ -28,8 +28,8 @@ package bet720_protocol_buffers;
 
 message Odd {
     int32 b             = 1;
-    float v             = 2;
-    float lv            = 3;
+    double v            = 2;
+    double lv           = 3;
     string n            = 4;
 }
 
@@ -37,7 +37,7 @@ message Market {
     int32 b              = 1;
     int32 r              = 2;
     string n             = 3;
-    optional float h     = 4;
+    optional double h    = 4;
     repeated Odd o      = 101;
 }
 
@@ -131,6 +131,19 @@ class LiveGamesSocketManager {
       console.warn("[Live Socket] Protobuf schema initialization warning:", err);
     }
     this.startClockTicker();
+    this.startAutoSyncTicker();
+  }
+
+  private autoSyncInterval: ReturnType<typeof setInterval> | null = null;
+
+  private startAutoSyncTicker() {
+    if (typeof window === "undefined" || this.autoSyncInterval) return;
+    this.autoSyncInterval = setInterval(() => {
+      if (this.socket && this.matchListeners.size > 0) {
+        // Continuous live background sync so odds are always fresh
+        this.requestRefresh();
+      }
+    }, 15000);
   }
 
   private startClockTicker() {
@@ -233,7 +246,8 @@ class LiveGamesSocketManager {
             if (!raw || !raw.std) continue;
             // Ignore Esoccer if desired
             if (raw.inf && raw.inf.toLowerCase().includes("esoccer")) continue;
-            const adapted = adaptLiveGame(raw);
+            const existingMatch = this.liveMatchesMap.get(String(raw.std));
+            const adapted = adaptLiveGame(raw, existingMatch);
             this.liveMatchesMap.set(adapted.id, adapted);
           }
 
@@ -261,7 +275,8 @@ class LiveGamesSocketManager {
 
       for (const raw of games) {
         if (!raw) continue;
-        const adapted = adaptLiveGame(raw);
+        const existingMatch = raw.std ? this.liveMatchesMap.get(String(raw.std)) : undefined;
+        const adapted = adaptLiveGame(raw, existingMatch);
         this.liveMatchesMap.set(adapted.id, adapted);
       }
 
@@ -320,6 +335,22 @@ class LiveGamesSocketManager {
     return () => {
       this.statusListeners.delete(listener);
     };
+  }
+
+  public async requestRefresh(): Promise<Match[]> {
+    if (!this.socket) {
+      this.init();
+    } else {
+      try {
+        // Disconnecting and reconnecting forces the bookmaker socket server to dump fresh buffers with latest odds immediately
+        this.socket.disconnect();
+        this.socket.connect();
+      } catch (err) {
+        console.warn("[Live Socket] Refresh connection error:", err);
+      }
+      this.broadcastMatches();
+    }
+    return Array.from(this.liveMatchesMap.values());
   }
 
   public getMatches(): Match[] {

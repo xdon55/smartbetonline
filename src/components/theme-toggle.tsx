@@ -1,42 +1,27 @@
 /**
  * theme-toggle.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Light/dark switch. Persists the choice in localStorage under
- * "smartbet-theme"; __root.tsx also has a pre-paint inline script reading the
- * same key so the correct theme applies before React hydrates (no flash).
+ * Light/dark switch component. Reads and updates the persisted theme preference.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
+import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
 
 export function ThemeToggle({ className = "" }: { className?: string }) {
-  const [dark, setDark] = useState(false);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("smartbet-theme");
-    const next = stored ? stored === "dark" : true;
-    setDark(next);
-    document.documentElement.classList.toggle("dark", next);
-  }, []);
-
-  const apply = (next: boolean) => {
-    setDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("smartbet-theme", next ? "dark" : "light");
-  };
+  const { isDark, toggleTheme } = useTheme();
 
   return (
     <button
       type="button"
-      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
-      onClick={() => apply(!dark)}
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      onClick={toggleTheme}
       className={cn(
-        "inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted",
+        "inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted cursor-pointer",
         className,
       )}
     >
-      {dark ? (
+      {isDark ? (
         <Sun className="h-[1.125rem] w-[1.125rem]" />
       ) : (
         <Moon className="h-[1.125rem] w-[1.125rem]" />

@@ -49,14 +49,7 @@ export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
       const url = new URL(request.url);
-      if (
-        url.pathname.startsWith("/api/proxy") ||
-        url.pathname.startsWith("/api/Account") ||
-        url.pathname.startsWith("/api/Online") ||
-        url.pathname.startsWith("/api/Ticket") ||
-        url.pathname.startsWith("/api/Statement") ||
-        url.pathname.startsWith("/api/CompanySettings")
-      ) {
+      if (url.pathname.startsWith("/api/")) {
         return await handleApiProxy(request);
       }
 

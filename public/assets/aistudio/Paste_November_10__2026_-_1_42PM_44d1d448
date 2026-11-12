@@ -1,0 +1,1762 @@
+Act as a senior full-stack software architect, sportsbook systems engineer, API integration specialist and frontend developer with extensive experience building production-grade online betting platforms.
+
+Your assignment is to integrate the supplied SmartBet Online API routes into the existing SmartBet website frontend.
+
+This is an integration and implementation assignment, not a demonstration or a UI redesign exercise.
+
+You must first understand the existing application architecture, inspect its source code, identify the current frontend components, state management, routing, authentication, betting slip, wallet and existing data structures, and then integrate the APIs into the existing application.
+
+Primary objective: Deliver a fully operational online sportsbook frontend that retrieves real data from SmartBet APIs and allows customers to register, log in, browse prematch and live events, select odds, place bets, manage their accounts, deposit money and request withdrawals.
+
+Do not build a separate application. Work within the existing SmartBet website and preserve its established design, branding, layout and functionality.
+
+1. API CONFIGURATION AND ARCHITECTURE
+
+Use the following API endpoints as the authoritative configuration.
+
+API base URLs
+
+NEXT_PUBLIC_BACKEND_URL=https://online.smartbet.ug
+NEXT_PUBLIC_GAMES_BASE_URL=https://api-games.smbet.net
+NEXT_PUBLIC_LIVE_GAMES_BASE_URL=https://socket.smbet.net
+
+If the project uses a different frontend framework, adapt the configuration to its existing environment-variable conventions.
+
+API responsibilities
+
+A. Backend API
+
+Base URL:
+
+https://online.smartbet.ug
+
+Responsible for:
+
+Authentication and session management.
+
+Customer registration.
+
+OTP verification.
+
+Password management.
+
+Customer profile and account information.
+
+Account balances.
+
+Betting ticket submission.
+
+Booking tickets.
+
+Bet history.
+
+Open bets.
+
+Deposits.
+
+Withdrawals.
+
+Account statements.
+
+Bonuses.
+
+Company betting settings.
+
+Backend API routes generally use the /api prefix.
+
+B. Prematch Games API
+
+Base URL:
+
+https://api-games.smbet.net/
+
+Responsible for:
+
+Prematch matches.
+
+Competitions and leagues.
+
+Countries.
+
+Match information.
+
+Prematch odds.
+
+Top matches.
+
+Game counts.
+
+C. Live Games API
+
+Socket.IO URL:
+
+wss://socket.smbet.net
+
+Responsible for:
+
+Live matches.
+
+Real-time scores.
+
+Live match clocks.
+
+Match status.
+
+Live betting markets.
+
+Live odds updates.
+
+Expired matches.
+
+Maintain three independent API service layers. Never mix the responsibilities of these services.
+
+Create a centralized API configuration and service architecture instead of scattering endpoint URLs throughout React components.
+
+2. FIRST PHASE: AUDIT THE EXISTING APPLICATION
+
+Before making changes, perform a comprehensive audit of the current SmartBet website.
+
+Inspect:
+
+Project structure and framework.
+
+Existing routes and page components.
+
+Authentication implementation.
+
+Customer registration forms.
+
+Login and logout functionality.
+
+Header and navigation.
+
+Prematch games listing.
+
+Live games listing.
+
+Match details and odds presentation.
+
+Betting slip.
+
+Bet placement functionality.
+
+Customer dashboard.
+
+Wallet and account balance.
+
+Deposit and withdrawal interfaces.
+
+Bet history.
+
+Open bets.
+
+Account statements.
+
+Bonus interfaces.
+
+Existing API services and utilities.
+
+State management and data caching.
+
+Existing responsive layouts.
+
+Error handling and loading states.
+
+Identify which components already exist and which ones are missing.
+
+Prepare an internal implementation checklist.
+
+Do not replace working components unnecessarily.
+
+Do not remove existing features simply because they are not directly covered by the supplied API documentation.
+
+Preserve existing business logic unless it conflicts with the documented API contract.
+
+3. SECOND PHASE: BUILD A CENTRALIZED API INTEGRATION LAYER
+
+Create a maintainable API architecture.
+
+Recommended logical structure:
+
+src/
+  services/
+    api/
+      config.ts
+      httpClient.ts
+      authService.ts
+      registrationService.ts
+      gamesService.ts
+      liveGamesService.ts
+      ticketService.ts
+      accountService.ts
+      depositService.ts
+      withdrawalService.ts
+      settingsService.ts
+
+  hooks/
+    useAuth.ts
+    usePrematchGames.ts
+    useLiveGames.ts
+    useBetSlip.ts
+    useAccountBalance.ts
+
+  types/
+    auth.ts
+    games.ts
+    odds.ts
+    tickets.ts
+    payments.ts
+    account.ts
+
+  utils/
+    formatOdds.ts
+    calculateBet.ts
+    normalizeGames.ts
+    apiErrors.ts
+
+Adapt this structure to the existing project instead of forcing a new architecture.
+
+HTTP client requirements
+
+Implement a centralized HTTP client with:
+
+Configurable base URLs.
+
+JSON request and response handling.
+
+Cookie-based authentication.
+
+Appropriate request credentials.
+
+Standardized error handling.
+
+Request timeouts.
+
+Network error handling.
+
+HTTP status handling.
+
+Consistent response parsing.
+
+For authenticated backend requests, ensure browser cookies are included using the appropriate credentials configuration, such as:
+
+credentials: 'include'
+
+If Axios is already installed, use its existing configuration instead of introducing another HTTP client.
+
+Do not assume that the backend returns JWT tokens.
+
+The supplied documentation specifies cookie-based sessions.
+
+Handle the following HTTP responses appropriately:
+
+200: Successful request.
+
+204: Successful request with no response body.
+
+400: Validation or request error.
+
+401: Authentication required or session expired.
+
+417: Betting or payment failure details may be provided.
+
+Never assume every successful HTTP request returns JSON. Some routes may return empty responses.
+
+Do not expose passwords, OTPs, session cookies or sensitive information in browser logs.
+
+4. THIRD PHASE: AUTHENTICATION AND CUSTOMER MANAGEMENT
+
+Implement complete customer authentication using the documented endpoints.
+
+Login
+
+Endpoint:
+
+POST /api/Account/Login
+
+Full URL:
+
+https://online.smartbet.ug/api/Account/Login
+
+Request:
+
+{
+  "username": "customer_username",
+  "password": "customer_password",
+  "rememberMe": true
+}
+
+Implement:
+
+Username and password validation.
+
+Login loading state.
+
+Invalid credential handling.
+
+Authentication success handling.
+
+Session persistence through backend cookies.
+
+Remember-me functionality according to backend behavior.
+
+Redirect to the appropriate authenticated page.
+
+Customer account initialization after login.
+
+After successful login, retrieve customer information through the appropriate account endpoint.
+
+Check login
+
+GET /api/Account/CheckLogin
+
+Use this endpoint to determine whether the customer has an active authenticated session.
+
+Implement authentication restoration when the website reloads.
+
+Support the optional strict401 parameter according to the backend contract.
+
+Handle anonymous 204 and 401 responses without treating them as application crashes.
+
+Logout
+
+POST /api/Account/LogOff
+
+Implement proper logout.
+
+After logout:
+
+Clear customer-specific frontend state.
+
+Clear the betting slip if appropriate to the existing application policy.
+
+Remove protected account information from the interface.
+
+Redirect the customer to the public website.
+
+Do not assume that deleting a frontend token logs the customer out. Use the backend logout endpoint.
+
+5. FOURTH PHASE: CUSTOMER REGISTRATION AND OTP
+
+Integrate the registration process.
+
+Check username availability
+
+GET /api/Account/CheckUsername?value={username}
+
+Check phone availability
+
+GET /api/Account/CheckPhone?value={phone}
+
+Check email availability
+
+GET /api/Account/CheckEmail?value={email}
+
+Check existing username
+
+GET /api/Online/UserExists?userName={username}
+
+Use availability checks to provide immediate feedback during registration.
+
+Implement appropriate debouncing so that the API is not called on every keystroke.
+
+Register customer
+
+POST /api/Account/Register
+
+Request:
+
+{
+  "email": "customer@example.com",
+  "phoneNumber": "256700000000",
+  "userName": "customer_username",
+  "NIN": "CUSTOMER_NIN",
+  "dob": "1995-04-20",
+  "FirstName": "Customer",
+  "SurName": "Name",
+  "PromoCode": null
+}
+
+Important:
+
+Preserve the exact property casing.
+
+Validate required fields.
+
+Apply appropriate phone number formatting.
+
+Do not invent mandatory fields beyond the documented requirements.
+
+Display backend validation errors in understandable language.
+
+Request OTP
+
+GET /api/Account/GetOTP?phoneNumber={phoneNumber}
+
+Validate OTP
+
+POST /api/Account/validate-otp
+
+Request:
+
+{
+  "phoneNumber": "256700000000",
+  "otpCode": "123456"
+}
+
+Verify OTP and set password
+
+POST /api/Account/VerifyOtpAndSetPassword
+
+Request:
+
+{
+  "phoneNumber": "256700000000",
+  "otpCode": "123456",
+  "newPassword": "NewSecurePassword",
+  "confirmPassword": "NewSecurePassword"
+}
+
+Password reset
+
+POST /api/Account/SetNewPassWord
+
+Request:
+
+{
+  "NewPassword": "NewSecurePassword",
+  "ConfirmPassword": "NewSecurePassword",
+  "username": "customer_username",
+  "Code": "RESET_CODE"
+}
+
+Create a complete registration and verification user journey.
+
+Include:
+
+Registration form.
+
+Field validation.
+
+Username availability.
+
+Phone and email availability.
+
+OTP request.
+
+OTP entry.
+
+OTP validation.
+
+Password creation.
+
+Password confirmation.
+
+Registration success and error states.
+
+IMPORTANT SECURITY CHECK:
+
+The API documentation identifies a potential issue where registration OTP delivery may target a fixed test recipient in the inspected implementation.
+
+Do not assume OTP delivery is production-ready.
+
+Make the integration easy to test, but flag this issue for backend verification before enabling production customer registration.
+
+6. FIFTH PHASE: PREMATCH GAMES AND ODDS
+
+Integrate the prematch games service.
+
+Base URL:
+
+https://api-games.smbet.net/
+
+Retrieve all prematch games
+
+GET /
+
+Expected response: An array of matches containing information such as:
+
+{
+  "OriginalMatchId": 123456,
+  "MatchNo": 101,
+  "HomeTeamName": "Home FC",
+  "AwayTeamName": "Away FC",
+  "League": "Example League",
+  "StartTime": "2026-11-06T18:00:00",
+  "MatchOdds": [
+    {
+      "BetCategory": "1x2",
+      "BetOption": "1",
+      "Line": null,
+      "Odd": 2.1,
+      "BookMakerId": 1,
+      "MatchOddId": 9001
+    }
+  ]
+}
+
+Build a robust normalization layer to convert the backend response into consistent frontend match and odds objects.
+
+Preserve the original API identifiers.
+
+Do not replace OriginalMatchId, MatchOddId or BookMakerId with generated frontend identifiers when constructing betting requests.
+
+Countries and leagues
+
+GET /api/Matches/GetCountriesWithLeagues
+
+Implement a country and league navigation system.
+
+Customers should be able to:
+
+Browse countries.
+
+Expand available leagues.
+
+Select a league.
+
+View matches belonging to that league.
+
+Navigate back to the main games listing.
+
+Use the actual response structure.
+
+Top matches
+
+GET /api/Matches/GetTopMatches?page=1&pagesize=20&includeOdds=true
+
+Implement pagination.
+
+Use the includeOdds parameter where supported.
+
+Game count
+
+GET /api/Matches/GetSetCount
+
+Use this endpoint where appropriate for displaying the current available game count.
+
+Prematch refresh strategy
+
+The documentation indicates that the game feed is refreshed periodically, approximately every 15 minutes in the documented frontend.
+
+Implement an appropriate configurable refresh strategy.
+
+Requirements:
+
+Do not unnecessarily fetch the entire feed on every component render.
+
+Prevent duplicate requests.
+
+Cache results appropriately.
+
+Handle loading and refreshing states.
+
+Avoid overwriting newer data with older responses.
+
+Preserve customer selections where possible.
+
+Refresh odds and match information intelligently.
+
+Do not assume a separate match-details REST endpoint exists. The documentation indicates that match details are obtained from the fetched games list.
+
+Prematch interface
+
+Integrate the data into the existing SmartBet design.
+
+Support:
+
+Popular matches.
+
+Featured matches.
+
+Country navigation.
+
+League navigation.
+
+Match listings.
+
+Match kickoff times.
+
+Home and away teams.
+
+Available betting markets.
+
+Odds selection.
+
+Match search.
+
+League filtering.
+
+Date filtering.
+
+Pagination or appropriate loading strategies.
+
+Only display markets and odds actually returned by the API.
+
+Do not hardcode sample matches or odds in production components.
+
+7. SIXTH PHASE: LIVE GAMES AND SOCKET.IO
+
+This is one of the most important integration areas.
+
+Live games are delivered through Socket.IO, not through a documented live-games REST endpoint.
+
+Connection:
+
+wss://socket.smbet.net
+
+Use the Socket.IO client library if it is not already installed.
+
+Do not implement this as an ordinary WebSocket connection unless the server explicitly supports that protocol independently.
+
+Documented events
+
+The API documentation identifies the following event types:
+
+1. buffers
+
+Delivers full protobuf-encoded live game updates.
+
+The updates contain game information, including odds, scores, time and match status.
+
+2. buffer-diffs
+
+Delivers incremental updates.
+
+The currently documented integration has this handling disabled.
+
+Do not assume incremental updates are already supported. Inspect the existing application and available decoding implementation before enabling them.
+
+3. expired-key
+
+Provides IDs of live matches that should be removed from the current live games collection.
+
+Live game data decoding
+
+The decoded data contains important fields:
+
+Field
+
+Purpose
+
+std
+
+Match ID
+
+cd
+
+Short code
+
+t1.n
+
+Home team name
+
+t2.n
+
+Away team name
+
+inf
+
+League
+
+sc.goal
+
+Score
+
+tm/tss
+
+Match clock
+
+st/stn
+
+Match status
+
+bt
+
+Betting markets and odds
+
+Implement a proper decoding and normalization layer.
+
+IMPORTANT:
+
+The documentation does not provide the complete protobuf schema, message definitions, binary encoding details or exact Socket.IO event registration implementation.
+
+Therefore:
+
+Inspect the existing application for protobuf libraries, schemas and previous live-game integrations.
+
+Inspect existing dependencies and any available decoder.
+
+Determine the actual payload structure before implementing the decoder.
+
+Do not guess protobuf field numbers or fabricate a schema.
+
+If the required protobuf schema or decoding implementation is unavailable, isolate this functionality behind a decoder interface and clearly identify the missing backend dependency.
+
+Do not silently display incorrectly decoded live data.
+
+Socket.IO connection management
+
+Implement:
+
+Connection initialization.
+
+Connection status monitoring.
+
+Reconnection handling.
+
+Duplicate listener prevention.
+
+Proper event cleanup.
+
+Buffer processing.
+
+Match state synchronization.
+
+Expired-match removal.
+
+Odds update propagation.
+
+Score update propagation.
+
+Match status updates.
+
+Avoid opening multiple socket connections when navigating between pages.
+
+Use a centralized live-game connection manager or an appropriate application-level provider.
+
+Live betting interface
+
+Display:
+
+Live matches.
+
+Competition and league.
+
+Teams.
+
+Current scores.
+
+Match clock.
+
+Match status.
+
+Available betting markets.
+
+Live odds.
+
+Update the interface in real time without refreshing the entire page.
+
+If a live match expires or becomes unavailable, remove it from the active collection and prevent further betting on it.
+
+When live odds change, update the betting slip and ensure that customers cannot unknowingly submit stale odds.
+
+8. SEVENTH PHASE: BETTING SLIP AND BET CALCULATIONS
+
+Build a complete betting slip integrated with the real API.
+
+The betting slip must support:
+
+Adding selections.
+
+Removing selections.
+
+Clearing the slip.
+
+Prematch selections.
+
+Live selections.
+
+Multiple selections.
+
+Stake entry.
+
+Total odds.
+
+Potential winnings.
+
+Bonus information where supported.
+
+Validation before submission.
+
+Selection data structure
+
+Maintain the identifiers required by the backend:
+
+betCategory
+
+betOption
+
+bookMakerId
+
+line
+
+matchId
+
+matchOddId
+
+odd
+
+IsLive
+
+Do not lose these identifiers during normalization or state updates.
+
+Bet calculations
+
+For a single selection:
+
+Potential return = Stake × Odds.
+
+For a multiple selection:
+
+Total odds = Product of individual selection odds.
+
+Potential return = Stake × Total odds.
+
+Apply any existing SmartBet betting rules and backend-provided limits.
+
+Do not invent bonus calculations or tax rules.
+
+Online settings
+
+Retrieve the betting limits from:
+
+GET /api/CompanySettings/OnlineSettings
+
+Expected fields:
+
+{
+  "MinStake": 1000,
+  "MaxStake": 1000000,
+  "MaxPayOut": 50000000
+}
+
+These values are illustrative. Use the actual API response.
+
+Apply:
+
+Minimum stake.
+
+Maximum stake.
+
+Maximum payout.
+
+Validate the stake before submission.
+
+Also validate that the customer has sufficient available balance using the latest account information.
+
+Submit betting ticket
+
+POST /api/Ticket
+
+Request structure:
+
+{
+  "betData": [
+    {
+      "betCategory": "1x2",
+      "betOption": "1",
+      "bookMakerId": 1,
+      "line": null,
+      "matchId": 123456,
+      "matchOddId": 9001,
+      "odd": 2.1,
+      "IsLive": false
+    }
+  ],
+  "totalBonus": 0,
+  "totalOdds": 2.1,
+  "totalStake": 1000,
+  "isLive": false
+}
+
+IMPORTANT:
+
+Preserve the exact property names and data types required by the backend.
+
+The isLive property identifies the overall ticket type, while individual selections include IsLive.
+
+Determine the correct handling of mixed prematch and live selections from the actual backend contract. Do not assume mixed tickets are supported.
+
+Booking tickets
+
+POST /api/Ticket/Booking
+
+This endpoint supports prematch ticket booking.
+
+Integrate booking functionality if the existing SmartBet product supports bet booking.
+
+The API returns a booking result and booking code.
+
+Do not treat a booking code as a confirmed placed bet.
+
+Bet submission workflow
+
+When a customer presses PLACE BET:
+
+Validate that the betting slip is not empty.
+
+Verify authentication.
+
+Validate stake.
+
+Validate betting limits.
+
+Check the current account balance.
+
+Validate the selections.
+
+Verify that the odds are still valid.
+
+Construct the exact ticket payload.
+
+Submit the ticket.
+
+Process the backend response.
+
+Display success or detailed rejection information.
+
+Refresh the account balance.
+
+Refresh open bets and bet history.
+
+Clear the betting slip only after confirmed success.
+
+Handle HTTP 400 and 417 responses carefully.
+
+If the network times out after a ticket submission, do not automatically resubmit the ticket. The original transaction may have succeeded. Reconcile the result using available ticket and account endpoints before attempting another submission.
+
+9. EIGHTH PHASE: CUSTOMER ACCOUNT AND WALLET
+
+Integrate the following endpoints.
+
+Customer information
+
+GET /api/Online/UserInfo
+
+Expected fields include:
+
+AccountId.
+
+Balance.
+
+UserId.
+
+PhoneNumber.
+
+Use the authenticated session.
+
+Display the customer's actual account balance.
+
+Do not use hardcoded demo balances.
+
+Bonuses
+
+GET /api/Account/Bonuses
+
+Retrieve:
+
+Bonus wallets.
+
+Bonus transactions.
+
+Display bonus information using the actual response structure.
+
+Do not assume bonus balances can be withdrawn or used as cash unless the backend explicitly supports that behavior.
+
+Account statement
+
+GET /api/Statement/User?userid={userid}
+
+Display customer transactions and account statements.
+
+Use the authenticated customer's actual UserId.
+
+Do not trust a customer-editable UserId when requesting protected financial information.
+
+My bets
+
+GET /api/Online/MyBets
+
+Display:
+
+Bet history.
+
+Ticket details.
+
+Available ticket statuses.
+
+Stake.
+
+Odds.
+
+Potential returns.
+
+Results where provided.
+
+Open bets count
+
+GET /api/Online/OpenBetsCount
+
+Use this to display the customer's current open-bet count.
+
+Receipt details
+
+GET /api/Receipt/GetById/{receiptId}
+
+Bet receipt selections
+
+GET /api/Bet/Receipt/{receiptId}
+
+Create a receipt/details view.
+
+Where appropriate, support printing a betting receipt.
+
+Do not invent receipt fields that are not returned by the API.
+
+10. NINTH PHASE: DEPOSITS AND PAYMENTS
+
+Implement mobile money deposits.
+
+Mobile money deposit request
+
+POST /api/Online/MobileMoneyDepositRequest
+
+Request:
+
+{
+  "phoneNumber": "256700000000",
+  "amount": 10000,
+  "PromoCode": null
+}
+
+Implement:
+
+Amount input.
+
+Phone number input.
+
+Input validation.
+
+Deposit request submission.
+
+Loading state.
+
+Transaction code display.
+
+Pending payment state.
+
+Deposit status
+
+GET /api/Online/DepositStatus/{code}
+
+This endpoint is essential.
+
+The documentation explicitly states that an accepted deposit request does not mean the payment has been completed.
+
+Therefore:
+
+Submit the deposit request.
+
+Retrieve the returned transaction code.
+
+Check the transaction status.
+
+Display pending status while awaiting payment.
+
+Update the interface when the payment succeeds.
+
+Refresh the account balance after confirmation.
+
+Handle failed and expired transactions.
+
+Use a controlled polling strategy where necessary.
+
+Do not continuously poll without limits.
+
+Redeem deposit
+
+POST /api/Online/redeem
+
+Request:
+
+{
+  "code": "DEPOSIT_CODE"
+}
+
+Implement this only according to the actual backend transaction workflow.
+
+Do not call redeem blindly or repeatedly.
+
+Prevent duplicate deposit submissions and duplicate redemption attempts.
+
+11. TENTH PHASE: WITHDRAWALS
+
+Integrate all documented withdrawal methods.
+
+Withdrawal at branch
+
+POST /api/Online/WithdrawAtBranch
+
+Request:
+
+{
+  "amount": 10000
+}
+
+Display the returned withdrawal code and result.
+
+Online withdrawal request
+
+POST /api/Online/WithdrawRequest
+
+Request:
+
+{
+  "requestId": "11111111-1111-4111-8111-111111111111",
+  "amount": 10000,
+  "altPhone": "256700000000"
+}
+
+Generate a valid UUID for requestId where required.
+
+Do not reuse request IDs for separate withdrawal transactions.
+
+Alternative phone confirmation
+
+POST /api/Online/ConfirmWithdrawAlt
+
+Request:
+
+{
+  "challengeId": "CHALLENGE_ID",
+  "otpCode": "123456"
+}
+
+Withdrawal status handling
+
+The API documentation identifies the following possible statuses:
+
+OTP challenge.
+
+PENDING.
+
+UNKNOWN.
+
+SUCCESSFUL.
+
+FAILED.
+
+REJECTED.
+
+Implement appropriate user interfaces for each state.
+
+For OTP challenges:
+
+Display the OTP verification interface.
+
+Accept the verification code.
+
+Submit the challenge ID and OTP.
+
+Display the resulting status.
+
+IMPORTANT:
+
+Some existing withdrawal callers were reported to use outdated payloads.
+
+Use the documented current request structure.
+
+Never display a withdrawal as successful until the backend confirms success.
+
+12. ELEVENTH PHASE: FRONTEND INTEGRATION AND USER EXPERIENCE
+
+Connect all API functionality to the existing SmartBet frontend.
+
+Do not create disconnected API functions that are never used by the actual interface.
+
+Ensure the following customer journeys work from beginning to end:
+
+Public customer journey
+
+Open homepage.
+
+Browse prematch matches.
+
+Browse live matches.
+
+Navigate competitions.
+
+View available odds.
+
+Select betting options.
+
+Add selections to betting slip.
+
+Register.
+
+Verify OTP.
+
+Set password.
+
+Log in.
+
+Authenticated betting journey
+
+View account balance.
+
+Place a single bet.
+
+Place a multiple bet.
+
+View bet confirmation.
+
+View open bets.
+
+View betting history.
+
+View receipts.
+
+View account statement.
+
+View bonuses.
+
+Financial journey
+
+Initiate mobile money deposit.
+
+Check deposit status.
+
+Confirm deposit.
+
+View updated balance.
+
+Request withdrawal.
+
+Complete alternative-phone OTP verification where required.
+
+View withdrawal result.
+
+Interface requirements
+
+Preserve SmartBet branding.
+
+Ensure:
+
+Responsive desktop layout.
+
+Responsive mobile layout.
+
+Tablet compatibility.
+
+Consistent loading indicators.
+
+Empty states.
+
+Error messages.
+
+Success notifications.
+
+Form validation.
+
+Accessible controls.
+
+Proper odds-selection feedback.
+
+Clear transaction status indicators.
+
+Do not allow API errors to break the entire application.
+
+13. TWELFTH PHASE: SECURITY AND PRODUCTION READINESS
+
+Treat this as a real-money sportsbook.
+
+Implement the following security requirements:
+
+Never store customer passwords in browser storage.
+
+Never expose session cookies to JavaScript unnecessarily.
+
+Use secure cookie-based authentication.
+
+Include credentials in authenticated requests.
+
+Protect authenticated routes.
+
+Validate all user inputs.
+
+Avoid exposing sensitive account information.
+
+Prevent accidental duplicate bet submissions.
+
+Prevent accidental duplicate payment submissions.
+
+Handle expired sessions.
+
+Clear protected customer information after logout.
+
+Do not trust frontend balance calculations as the final authority.
+
+Treat backend validation as authoritative.
+
+Never assume a successful request means a financial transaction has settled.
+
+Never expose internal API credentials or secrets in frontend code.
+
+Avoid logging OTPs, passwords or payment-sensitive information.
+
+Investigate CORS and cookie configuration.
+
+Because the frontend and backend may be hosted on different origins, verify that the backend supports credentialed cross-origin requests and the appropriate cookie attributes, including SameSite and Secure settings.
+
+Do not attempt to bypass CORS restrictions from the browser.
+
+If backend configuration changes are required, document them separately.
+
+14. THIRTEENTH PHASE: ERROR HANDLING AND EDGE CASES
+
+Build centralized error handling for:
+
+Internet disconnection.
+
+API server unavailable.
+
+Request timeout.
+
+Invalid credentials.
+
+Expired session.
+
+Invalid registration details.
+
+Username already taken.
+
+Phone number already registered.
+
+Invalid OTP.
+
+Expired OTP.
+
+Insufficient balance.
+
+Invalid stake.
+
+Odds changed.
+
+Match suspended.
+
+Match expired.
+
+Ticket rejected.
+
+Deposit pending.
+
+Deposit failed.
+
+Withdrawal pending.
+
+Withdrawal rejected.
+
+Socket connection lost.
+
+Protobuf decoding failure.
+
+Invalid API response.
+
+Use meaningful customer-facing messages.
+
+Avoid displaying raw server stack traces.
+
+Log technical details safely for development diagnostics.
+
+15. FOURTEENTH PHASE: TESTING AND VERIFICATION
+
+After implementation, test the integration systematically.
+
+Do not consider an endpoint integrated merely because an API service function exists.
+
+Verify that it works through the actual website interface.
+
+API verification checklist
+
+Functionality
+
+Endpoint
+
+Required verification
+
+Login
+
+Account/Login
+
+Authentication and session
+
+Session
+
+Account/CheckLogin
+
+Session restoration
+
+Logout
+
+Account/LogOff
+
+Session termination
+
+Registration
+
+Account/Register
+
+Customer registration
+
+Username
+
+Account/CheckUsername
+
+Availability
+
+Phone
+
+Account/CheckPhone
+
+Availability
+
+Email
+
+Account/CheckEmail
+
+Availability
+
+OTP
+
+Account/GetOTP
+
+OTP request
+
+OTP validation
+
+Account/validate-otp
+
+OTP verification
+
+Password setup
+
+Account/VerifyOtpAndSetPassword
+
+Password creation
+
+Prematch
+
+Games API /
+
+Match and odds retrieval
+
+Countries
+
+Matches/GetCountriesWithLeagues
+
+Country and league retrieval
+
+Top matches
+
+Matches/GetTopMatches
+
+Match retrieval and pagination
+
+Game count
+
+Matches/GetSetCount
+
+Game count
+
+Live games
+
+Socket.IO buffers
+
+Real-time game decoding
+
+Expired matches
+
+Socket.IO expired-key
+
+Match removal
+
+Settings
+
+CompanySettings/OnlineSettings
+
+Betting limits
+
+Account
+
+Online/UserInfo
+
+Customer balance
+
+Bonuses
+
+Account/Bonuses
+
+Bonus retrieval
+
+Statement
+
+Statement/User
+
+Transaction history
+
+Place bet
+
+Ticket
+
+Successful ticket submission
+
+Book bet
+
+Ticket/Booking
+
+Booking code
+
+Bet history
+
+Online/MyBets
+
+Historical tickets
+
+Open bets
+
+Online/OpenBetsCount
+
+Open bet count
+
+Receipt
+
+Receipt/GetById
+
+Receipt retrieval
+
+Receipt selections
+
+Bet/Receipt
+
+Ticket selections
+
+Deposit
+
+MobileMoneyDepositRequest
+
+Deposit initiation
+
+Deposit status
+
+DepositStatus
+
+Payment confirmation
+
+Redeem
+
+Online/redeem
+
+Deposit redemption
+
+Branch withdrawal
+
+WithdrawAtBranch
+
+Withdrawal code
+
+Online withdrawal
+
+WithdrawRequest
+
+Withdrawal request
+
+OTP withdrawal
+
+ConfirmWithdrawAlt
+
+OTP confirmation
+
+Use real test accounts and controlled test transactions where available.
+
+Do not perform real-money transactions during testing without explicit authorization.
+
+Additional tests
+
+Test:
+
+Mobile responsiveness.
+
+Multiple browser refreshes.
+
+Session expiry.
+
+Socket reconnection.
+
+Odds updates while a selection is in the slip.
+
+Match expiration.
+
+Duplicate bet prevention.
+
+Duplicate payment prevention.
+
+Empty game responses.
+
+Invalid server responses.
+
+Slow network conditions.
+
+16. FIFTEENTH PHASE: IMPLEMENTATION RULES
+
+These instructions are mandatory throughout the assignment.
+
+RULE 1: Inspect before modifying.
+
+Understand the existing codebase before changing it.
+
+RULE 2: Preserve the existing design.
+
+Do not redesign the website or replace the existing UI unnecessarily.
+
+RULE 3: Use the actual API.
+
+Remove production dependencies on mock matches, hardcoded odds, fake balances and simulated transactions.
+
+RULE 4: Respect the API contract.
+
+Use documented routes, HTTP methods, parameter names and payload property casing.
+
+RULE 5: Do not fabricate missing information.
+
+Where the documentation does not provide a complete response schema, protobuf definition or transaction rule, inspect available source code and dependencies first.
+
+If information is unavailable, isolate the missing functionality and report the exact backend clarification required.
+
+RULE 6: Separate responsibilities.
+
+Keep prematch, live games, authentication, tickets and financial transactions in their respective services.
+
+RULE 7: Avoid unnecessary dependencies.
+
+Reuse existing libraries and application patterns wherever possible.
+
+RULE 8: Do not break existing functionality.
+
+Run regression checks after implementation.
+
+RULE 9: Make changes incrementally.
+
+Do not rewrite the entire application in one operation.
+
+RULE 10: Deliver working functionality.
+
+The final result must be an integrated sportsbook, not a collection of API wrappers or a frontend containing demonstration data.
+
+17. SIXTEENTH PHASE: FINAL IMPLEMENTATION REPORT
+
+When implementation is complete, provide a detailed report containing:
+
+Existing application architecture identified.
+
+Files and components modified.
+
+New API services created.
+
+Endpoints successfully integrated.
+
+Authentication implementation.
+
+Prematch implementation.
+
+Live Socket.IO implementation.
+
+Protobuf decoding implementation and its verified source.
+
+Betting slip implementation.
+
+Ticket submission implementation.
+
+Account and wallet implementation.
+
+Deposit implementation.
+
+Withdrawal implementation.
+
+Error handling improvements.
+
+Security improvements.
+
+Tests performed and their results.
+
+Outstanding backend dependencies.
+
+Endpoints that could not be verified.
+
+Any configuration changes required for deployment.
+
+Clearly distinguish between:
+
+Fully implemented and tested.
+
+Implemented but awaiting backend verification.
+
+Blocked by missing API information.
+
+Not yet implemented.
+
+Never claim that an integration is complete when it has not been tested.
+
+EXECUTION INSTRUCTIONS
+
+Start by auditing the existing SmartBet project.
+
+Do not immediately begin rewriting components.
+
+First identify the current architecture and map the existing frontend features to the API endpoints.
+
+Then implement the integration in logical stages:
+
+API configuration and centralized HTTP client.
+
+Authentication and registration.
+
+Prematch games and odds.
+
+Live Socket.IO integration.
+
+Betting slip and ticket submission.
+
+Customer accounts and wallet.
+
+Deposits and withdrawals.
+
+Bet history, statements and receipts.
+
+Error handling and security.
+
+End-to-end testing and final verification.
+
+After each stage:
+
+Inspect your changes.
+
+Check for TypeScript errors.
+
+Resolve build errors.
+
+Verify API request construction.
+
+Test the affected functionality.
+
+Preserve previously working functionality.
+
+If you encounter an API contract ambiguity, do not invent a solution. Record the missing information and continue implementing the independent parts.
+
+FINAL OBJECTIVE:
+
+Deliver a complete, production-oriented SmartBet online sportsbook frontend connected to the supplied APIs, with real prematch games, real-time live games and odds, functional customer authentication, betting slip, bet placement, account management, deposits and withdrawals.
+
+The website must retain its existing SmartBet identity while becoming fully functional through the actual backend services.
+
+Begin with the application audit and implementation plan, then proceed with the integration.

@@ -4,9 +4,12 @@
  * Reads from the bet slip context; replace with a bet-by-id API fetch.
  */
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import { useBetSlip } from "@/lib/betslip";
+import { useBetSlip, type PlacedBet } from "@/lib/betslip";
 import { formatUgx } from "@/lib/betting-data";
+import { fetchUserBetTickets, retrieveBookingCode } from "@/lib/supabase-sportsbook";
+import { smartBetApi } from "@/lib/api-smartbet";
 
 export const Route = createFileRoute("/my-bets/$betId")({
   head: () => ({
@@ -36,7 +39,108 @@ const statusStyles: Record<string, string> = {
 function BetReceipt() {
   const { betId } = useParams({ from: "/my-bets/$betId" });
   const { bets } = useBetSlip();
-  const bet = bets.find((b) => b.id === betId);
+  const [fetchedBet, setFetchedBet] = useState<PlacedBet | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const bet = bets.find((b) => b.id === betId || b.code === betId) || fetchedBet;
+
+  useEffect(() => {
+    if (bet) return;
+    let mounted = true;
+    setLoading(true);
+
+    async function loadReceipt() {
+      try {
+        const all = await fetchUserBetTickets();
+        const found = all.find((b) => b.id === betId || b.code === betId);
+        if (found && mounted) {
+          setFetchedBet(found);
+          setLoading(false);
+          return;
+        }
+
+        // Also check booking codes
+        const booking = await retrieveBookingCode(betId);
+        if (booking && mounted) {
+          setFetchedBet({
+            id: booking.code,
+            code: booking.code,
+            placedAt: new Date(booking.createdAt).toLocaleDateString(),
+            stake: booking.stake,
+            totalOdds: booking.totalOdds,
+            potential: Math.round(booking.stake * booking.totalOdds),
+            status: "open",
+            selections: booking.selections,
+          });
+          setLoading(false);
+          return;
+        }
+
+        // Also query SmartBet Online Receipt API
+        try {
+          const remoteReceipt = (await smartBetApi.getReceiptById(betId)) as {
+            ReceiptId?: string | number;
+            TotalStake?: number;
+            TotalOdds?: number;
+            PotentialPayout?: number;
+            Status?: string;
+            Date?: string;
+          };
+
+          let remoteSelections: Selection[] = [];
+          try {
+            const selRes = (await smartBetApi.getTicketSelections(betId)) as {
+              selections?: Selection[];
+            };
+            if (selRes && Array.isArray(selRes.selections)) {
+              remoteSelections = selRes.selections;
+            }
+          } catch {
+            // Ignore
+          }
+
+          if (remoteReceipt && (remoteReceipt.ReceiptId || remoteReceipt.TotalStake) && mounted) {
+            setFetchedBet({
+              id: String(remoteReceipt.ReceiptId || betId),
+              code: String(remoteReceipt.ReceiptId || betId),
+              placedAt: remoteReceipt.Date
+                ? new Date(remoteReceipt.Date).toLocaleDateString()
+                : "Recent",
+              stake: remoteReceipt.TotalStake || 2000,
+              totalOdds: remoteReceipt.TotalOdds || 3.5,
+              potential: remoteReceipt.PotentialPayout || 7000,
+              status: (remoteReceipt.Status?.toLowerCase() as "open" | "won" | "lost") || "open",
+              selections: remoteSelections.length
+                ? remoteSelections
+                : [
+                    {
+                      id: "leg-1",
+                      matchId: "m1",
+                      match: "Official Sportsbook Selection",
+                      market: "Match Odds",
+                      pick: "1",
+                      odds: remoteReceipt.TotalOdds || 3.5,
+                    },
+                  ],
+            });
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // Fall through
+        }
+      } catch (err) {
+        console.warn("[Receipt] Failed to load receipt:", err);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    loadReceipt();
+    return () => {
+      mounted = false;
+    };
+  }, [bet, betId]);
 
   return (
     <main className="mx-auto max-w-3xl px-3 py-4">

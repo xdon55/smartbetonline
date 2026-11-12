@@ -202,31 +202,13 @@ function SectionHead({
   );
 }
 
-const PAGE_SIZE = 10;
-
 function SportsGamesSection({ feedMatches }: { feedMatches: typeof matches }) {
-  const [visible, setVisible] = useState(PAGE_SIZE);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const activePool = feedMatches.length > 0 ? feedMatches : matches;
   const sportMatches = [...activePool]
     .sort((a, b) => Number(b.sport === "Football") - Number(a.sport === "Football"))
-    .sort((a, b) => Number(b.popular) - Number(a.popular))
-    .slice(0, 10);
-  const shown = sportMatches.slice(0, visible);
-  const hasMore = visible < sportMatches.length;
-
-  useEffect(() => {
-    if (!hasMore) return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) {
-        setVisible((v) => Math.min(v + PAGE_SIZE, sportMatches.length));
-      }
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [hasMore, sportMatches.length]);
+    .sort((a, b) => Number(b.popular) - Number(a.popular));
+  const shown = sportMatches.slice(0, 10);
+  const totalGames = sportMatches.length;
 
   return (
     <div className="space-y-3">
@@ -235,18 +217,18 @@ function SportsGamesSection({ feedMatches }: { feedMatches: typeof matches }) {
         {shown.map((m) => (
           <MatchCard key={m.id} match={m} />
         ))}
+        {totalGames > 0 && (
+          <div className="flex justify-center border-t border-border/60 bg-muted/20 p-2.5">
+            <Link
+              to="/sports"
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-accent transition-colors hover:text-accent/80 hover:underline"
+            >
+              <span>See all</span>
+              <span className="font-mono">({totalGames})</span>
+            </Link>
+          </div>
+        )}
       </section>
-      {hasMore && (
-        <div ref={sentinelRef} className="flex justify-center px-3 md:px-0">
-          <button
-            type="button"
-            onClick={() => setVisible((v) => Math.min(v + PAGE_SIZE, sportMatches.length))}
-            className="h-10 w-full rounded-md border border-border bg-card text-xs font-semibold text-card-foreground transition-colors hover:border-accent/60 hover:text-accent"
-          >
-            More games
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -290,6 +272,15 @@ function HomePage() {
               {liveNow.map((m) => (
                 <MatchCard key={m.id} match={m} />
               ))}
+              <div className="flex justify-center border-t border-border/60 bg-muted/20 p-2.5">
+                <Link
+                  to="/live"
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-accent transition-colors hover:text-accent/80 hover:underline"
+                >
+                  <span>See all</span>
+                  <span className="font-mono">({liveMatches.length})</span>
+                </Link>
+              </div>
             </section>
           </div>
         )}

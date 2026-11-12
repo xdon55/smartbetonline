@@ -33,7 +33,7 @@ export const Route = createFileRoute("/booking-code")({
 });
 
 function BookingCodePage() {
-  const { toggle, selections, totalOdds, stake } = useBetSlip();
+  const { loadBookingCode, selections, totalOdds, stake } = useBetSlip();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -48,52 +48,13 @@ function BookingCodePage() {
 
     setLoading(true);
     try {
-      // 1. Try querying SmartBet ticket selections API
-      try {
-        const remoteSelections = (await smartBetApi.getTicketSelections(cleanCode)) as Array<{
-          MatchId: number;
-          MatchName?: string;
-          BetCategory?: string;
-          BetOption?: string;
-          Odd?: number;
-        }>;
-
-        if (Array.isArray(remoteSelections) && remoteSelections.length > 0) {
-          remoteSelections.forEach((leg) => {
-            toggle({
-              id: `${leg.MatchId}-${leg.BetCategory || "1x2"}-${leg.BetOption || "1"}`,
-              matchId: String(leg.MatchId),
-              match: leg.MatchName || `Match #${leg.MatchId}`,
-              market: leg.BetCategory || "1X2",
-              pick: leg.BetOption || "1",
-              odds: leg.Odd || 2.0,
-            });
-          });
-          toast.success(`Booking code ${cleanCode} loaded ${remoteSelections.length} picks!`);
-          setCode("");
-          return;
-        }
-      } catch {
-        // Fall through to sample fixtures
-      }
-
-      // 2. Hydrate sample selections
-      const picks = matches.slice(0, 3);
-      picks.forEach((m) => {
-        const market = m.markets[0];
-        const o = market?.outcomes[0];
-        if (!market || !o) return;
-        toggle({
-          id: `${m.id}-${market.id}-${o.id}`,
-          matchId: m.id,
-          match: `${m.home} v ${m.away}`,
-          market: market.name,
-          pick: o.label,
-          odds: o.odds,
-        });
-      });
-      toast.success(`Booking code ${cleanCode} loaded to your bet slip`);
+      const res = await loadBookingCode(cleanCode);
+      toast.success(
+        `Booking code ${cleanCode} loaded ${res.count} selections (@${res.totalOdds.toFixed(2)})!`,
+      );
       setCode("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load booking code");
     } finally {
       setLoading(false);
     }

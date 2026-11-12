@@ -1,104 +1,82 @@
 /**
  * hooks/use-live-games.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * React hook that streams real-time live games from Socket.IO and falls back
- * to the HTTP prematch/live feed if disconnected.
+ * React hook that streams real-time live games from Socket.IO (wss://socket.smbet.net).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useEffect, useState, useCallback } from "react";
 import { liveGamesSocket, type LiveSocketStatus } from "@/lib/socket-live-games";
 import { matches as fallbackMatches, type Match } from "@/lib/betting-data";
-import { smartBetApi } from "@/lib/api-smartbet";
-import { adaptPrematchGame } from "@/lib/matches-adapter";
+
+let cachedLiveMatches: Match[] = [];
 
 export function useLiveGames() {
-  const [socketMatches, setSocketMatches] = useState<Match[]>([]);
-  const [status, setStatus] = useState<LiveSocketStatus>("connecting");
-  const [loading, setLoading] = useState(true);
+  const [socketMatches, setSocketMatches] = useState<Match[]>(() => {
+    const existing = liveGamesSocket.getMatches();
+    return existing.length > 0 ? existing : cachedLiveMatches;
+  });
+  const [status, setStatus] = useState<LiveSocketStatus>(() =>
+    typeof window !== "undefined" ? liveGamesSocket.getStatus() : "connecting",
+  );
+  const [loading, setLoading] = useState<boolean>(
+    () => socketMatches.length === 0 && cachedLiveMatches.length === 0,
+  );
 
   useEffect(() => {
-    // 1. Subscribe to Socket.IO live stream
+    // Subscribe to Socket.IO live stream
     const unsubscribeMatches = liveGamesSocket.subscribe((liveList) => {
-      setSocketMatches(liveList);
-      if (liveList.length > 0) {
+      if (liveList && liveList.length > 0) {
+        cachedLiveMatches = liveList;
+        setSocketMatches(liveList);
         setLoading(false);
       }
     });
 
     const unsubscribeStatus = liveGamesSocket.subscribeStatus((newStatus) => {
       setStatus(newStatus);
+      if (newStatus === "connected" || newStatus === "error") {
+        setLoading(false);
+      }
     });
 
-    // 2. Initial HTTP fetch fallback
-    let mounted = true;
-    async function loadFallbackFeed() {
-      try {
-        const topGames = await smartBetApi.getPrematchFeed();
-        if (mounted && topGames && topGames.length > 0) {
-          const adapted = topGames.map(adaptPrematchGame);
-          // Only use if socket hasn't yielded live matches yet
-          if (liveGamesSocket.getMatches().length === 0) {
-            setSocketMatches(
-              adapted.slice(0, 6).map((m, idx) => ({
-                ...m,
-                live: {
-                  minute: 35 + idx * 8,
-                  homeScore: idx % 2 === 0 ? 1 : 0,
-                  awayScore: idx % 3 === 0 ? 2 : 1,
-                },
-              })),
-            );
-          }
-        }
-      } catch (err) {
-        console.warn("[useLiveGames] HTTP feed fallback error, using local seed:", err);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-
-    loadFallbackFeed();
+    // Auto-sync live odds every 12s in background so odds are always 100% up to date
+    const autoInterval = setInterval(() => {
+      liveGamesSocket.requestRefresh();
+    }, 12000);
 
     return () => {
-      mounted = false;
       unsubscribeMatches();
       unsubscribeStatus();
+      clearInterval(autoInterval);
     };
   }, []);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const feed = await smartBetApi.getPrematchFeed();
-      if (feed && feed.length > 0) {
-        const adapted = feed.map(adaptPrematchGame);
-        setSocketMatches(
-          adapted.slice(0, 6).map((m, idx) => ({
-            ...m,
-            live: {
-              minute: 40 + idx * 5,
-              homeScore: idx % 2,
-              awayScore: idx % 3,
-            },
-          })),
-        );
+    await liveGamesSocket.requestRefresh();
+    // Re-check after reconnection snapshot arrives
+    setTimeout(() => {
+      const current = liveGamesSocket.getMatches();
+      if (current.length > 0) {
+        cachedLiveMatches = current;
+        setSocketMatches(current);
       }
-    } catch {
-      // Keep existing matches
-    } finally {
       setLoading(false);
-    }
+    }, 450);
   }, []);
 
-  // Use socket matches if available, else static seed live matches
+  // Use real socket matches if available, else cached, else fallback
   const displayMatches =
-    socketMatches.length > 0 ? socketMatches : fallbackMatches.filter((m) => m.live);
+    socketMatches.length > 0
+      ? socketMatches
+      : cachedLiveMatches.length > 0
+        ? cachedLiveMatches
+        : fallbackMatches.filter((m) => m.live);
 
   return {
     matches: displayMatches,
     status,
-    loading,
+    loading: loading && displayMatches.length === 0,
     refresh,
-    isRealTime: status === "connected" && socketMatches.length > 0,
+    isRealTime: status === "connected" && displayMatches.length > 0,
   };
 }

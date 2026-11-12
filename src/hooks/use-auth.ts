@@ -65,12 +65,37 @@ export function useAuth() {
           data: { session },
         } = await supabase.auth.getSession();
         if (session?.user && mounted) {
+          const sUser = session.user;
           setUser({
-            id: session.user.id,
-            email: session.user.email,
-            username: session.user.user_metadata?.display_name || session.user.email?.split("@")[0],
+            id: sUser.id,
+            email: sUser.email,
+            username: sUser.user_metadata?.display_name || sUser.email?.split("@")[0],
           });
-          const p = await fetchProfile().catch(() => null);
+
+          // Fetch profile from server function, or fallback directly to supabase table
+          let p: UserProfile | null = null;
+          try {
+            p = await fetchProfile();
+          } catch {
+            const { data: dbProfile } = await supabase
+              .from("profiles")
+              .select("*")
+              .eq("id", sUser.id)
+              .maybeSingle();
+
+            if (dbProfile) {
+              p = {
+                id: dbProfile.id,
+                display_name: dbProfile.display_name,
+                phone: dbProfile.phone,
+                country: dbProfile.country,
+                currency: dbProfile.currency,
+                date_of_birth: dbProfile.date_of_birth,
+                kyc_status: dbProfile.kyc_status,
+                account_status: dbProfile.account_status,
+              };
+            }
+          }
           if (mounted && p) setProfile(p);
         }
       } catch {
@@ -82,10 +107,28 @@ export function useAuth() {
 
     checkActiveUser();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session?.user) {
-        setUser({ id: session.user.id, email: session.user.email });
-        fetchProfile().then(setProfile).catch(console.error);
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session?.user) {
+        const sUser = session.user;
+        setUser({
+          id: sUser.id,
+          email: sUser.email,
+          username: sUser.user_metadata?.display_name || sUser.email?.split("@")[0],
+        });
+
+        try {
+          const p = await fetchProfile().catch(async () => {
+            const { data: dbProfile } = await supabase
+              .from("profiles")
+              .select("*")
+              .eq("id", sUser.id)
+              .maybeSingle();
+            return dbProfile as UserProfile | null;
+          });
+          if (p) setProfile(p);
+        } catch (err) {
+          console.warn("[Auth] Failed to load profile on auth change:", err);
+        }
       }
       if (event === "SIGNED_OUT") {
         setUser(null);
