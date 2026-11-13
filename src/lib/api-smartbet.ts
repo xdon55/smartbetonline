@@ -47,10 +47,43 @@ export interface SmartBetUser {
   AccountId?: string | number;
   UserId: string;
   Balance: number;
+  BonusBalance?: number;
   PhoneNumber: string;
   UserName?: string;
   Email?: string;
   Roles?: string[];
+  SessionId?: string;
+}
+
+export interface BonusItem {
+  Id: string;
+  Name: string;
+  Amount: number;
+  Status: string;
+  ExpiresAt: string;
+}
+
+export interface BonusTransaction {
+  Id: string;
+  Date: string;
+  Type: string;
+  Amount: number;
+  Description: string;
+}
+
+export interface BonusesResponse {
+  BonusBalance: number;
+  ActiveBonuses: BonusItem[];
+  Transactions?: BonusTransaction[];
+}
+
+export interface StatementRow {
+  TransactionId: string;
+  Date: string;
+  Type: string;
+  Amount: number;
+  Balance: number;
+  Description: string;
 }
 
 export interface BetLegPayload {
@@ -87,12 +120,30 @@ export interface DepositRequestPayload {
   PromoCode?: string | null;
 }
 
+export interface DepositRequestResponse {
+  code: string;
+  transactionCode?: string;
+  amount?: number;
+  status: string;
+  message?: string;
+}
+
 export interface DepositStatusResponse {
   code: string;
   status: "OTP" | "PENDING" | "UNKNOWN" | "SUCCESSFUL" | "FAILED" | "REJECTED" | string;
+  Status?: string;
   amount: number;
   balance?: number;
   updateTime?: string;
+}
+
+export interface RedeemDepositResponse {
+  success?: boolean;
+  code?: string;
+  amount?: number;
+  balance: number;
+  Balance?: number;
+  message?: string;
 }
 
 export interface WithdrawRequestPayload {
@@ -103,8 +154,21 @@ export interface WithdrawRequestPayload {
 
 export interface WithdrawResponse {
   status: "OTP" | "PENDING" | "UNKNOWN" | "SUCCESSFUL" | "FAILED" | "REJECTED" | string;
+  Status?: string;
   challengeId?: string;
   transactionId?: string;
+  amount?: number;
+  balance?: number;
+  message?: string;
+}
+
+export interface WithdrawAtBranchResponse {
+  code: string;
+  Code?: string;
+  amount?: number;
+  balance?: number;
+  status?: string;
+  expiresIn?: string;
   message?: string;
 }
 
@@ -114,7 +178,7 @@ export interface OnlineSettings {
   MaxPayOut: number;
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     message: string,
     public status?: number,
@@ -126,12 +190,54 @@ class ApiError extends Error {
 }
 
 /**
+ * Formats a Ugandan phone number (e.g. "0772 000 000" or "+256772000000")
+ * into the canonical "256772000000" format expected by SmartBet Online API.
+ */
+export function formatSmartBetPhone(input: string): string {
+  const digits = (input ?? "").replace(/[^\d]/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("256")) return digits;
+  if (digits.startsWith("00")) return digits.slice(2);
+  if (digits.startsWith("0")) return `256${digits.slice(1)}`;
+  return `256${digits}`;
+}
+
+/**
  * Clean URL builder ensuring no accidental double `/api` or trailing slashes.
  */
 function buildUrl(base: string, path: string): string {
   const cleanBase = base.replace(/\/+$/, "");
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   return `${cleanBase}${cleanPath}`;
+}
+
+const SESSION_TOKEN_KEY = "smartbet_session_token";
+
+export function clearSmartBetSession(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
+function getSmartBetSession(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(SESSION_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setSmartBetSession(token: string | undefined): void {
+  if (typeof window === "undefined" || !token) return;
+  try {
+    localStorage.setItem(SESSION_TOKEN_KEY, token);
+  } catch {
+    // Ignore
+  }
 }
 
 /**
@@ -150,6 +256,7 @@ async function fetchJson<T>(
     // Use credentials: 'omit' for public games feed, and 'include' for authenticated backend/proxy routes.
     const isPublicGamesFeed = url.includes("api-games.smbet.net");
     const credentialsMode: RequestCredentials = isPublicGamesFeed ? "omit" : "include";
+    const sessionToken = !isPublicGamesFeed ? getSmartBetSession() : null;
 
     const response = await fetch(url, {
       ...options,
@@ -158,6 +265,7 @@ async function fetchJson<T>(
       headers: {
         Accept: "application/json",
         ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(sessionToken ? { "X-SmartBet-Session": sessionToken } : {}),
         ...options.headers,
       },
     });
@@ -223,16 +331,32 @@ export const smartBetApi = {
 
   // ── 2. Authentication ─────────────────────────────────────────────────────
   async login(username: string, password: string, rememberMe = true): Promise<SmartBetUser> {
-    return fetchJson<SmartBetUser>(buildUrl(API_CONFIG.backendUrl, "/api/Account/Login"), {
-      method: "POST",
-      body: JSON.stringify({ username, password, rememberMe }),
-    });
+    const res = await fetchJson<SmartBetUser>(
+      buildUrl(API_CONFIG.backendUrl, "/api/Account/Login"),
+      {
+        method: "POST",
+        body: JSON.stringify({ username, password, rememberMe }),
+      },
+    );
+    if (res?.SessionId) setSmartBetSession(res.SessionId);
+    return res;
   },
 
   async logOff(): Promise<void> {
-    await fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Account/LogOff"), {
-      method: "POST",
-    });
+    try {
+      await fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Account/LogOff"), {
+        method: "POST",
+      });
+    } finally {
+      clearSmartBetSession();
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.removeItem("smartbet_active_user");
+        } catch {
+          // Ignore
+        }
+      }
+    }
   },
 
   async checkLogin(strict401 = false): Promise<SmartBetUser | null> {
@@ -289,11 +413,18 @@ export const smartBetApi = {
     FirstName: string;
     SurName: string;
     PromoCode?: string | null;
-  }): Promise<{ success: boolean; message?: string; otpExpiry?: string }> {
-    return fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Account/Register"), {
+  }): Promise<{ success: boolean; message?: string; otpExpiry?: string; SessionId?: string }> {
+    const res = await fetchJson<{
+      success: boolean;
+      message?: string;
+      otpExpiry?: string;
+      SessionId?: string;
+    }>(buildUrl(API_CONFIG.backendUrl, "/api/Account/Register"), {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    if (res?.SessionId) setSmartBetSession(res.SessionId);
+    return res;
   },
 
   async getOtp(phoneNumber: string): Promise<boolean> {
@@ -344,20 +475,24 @@ export const smartBetApi = {
     return fetchJson<SmartBetUser>(buildUrl(API_CONFIG.backendUrl, "/api/Online/UserInfo"));
   },
 
-  async getBonuses(): Promise<unknown> {
-    return fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Account/Bonuses"));
+  async getBonuses(): Promise<BonusesResponse> {
+    return fetchJson<BonusesResponse>(buildUrl(API_CONFIG.backendUrl, "/api/Account/Bonuses"));
   },
 
-  async getStatement(userId: string): Promise<unknown[]> {
-    return fetchJson<unknown[]>(
+  async getStatement(userId: string): Promise<StatementRow[]> {
+    return fetchJson<StatementRow[]>(
       buildUrl(API_CONFIG.backendUrl, `/api/Statement/User?userid=${encodeURIComponent(userId)}`),
     );
   },
 
   // ── 5. Tickets & Bets ────────────────────────────────────────────────────
-  async submitTicket(
-    ticket: TicketPayload,
-  ): Promise<{ receiptId?: string | number; success: boolean; message?: string }> {
+  async submitTicket(ticket: TicketPayload): Promise<{
+    receiptId?: string | number;
+    bookingCode?: string;
+    balance?: number;
+    success: boolean;
+    message?: string;
+  }> {
     return fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Ticket"), {
       method: "POST",
       body: JSON.stringify(ticket),
@@ -396,15 +531,15 @@ export const smartBetApi = {
     amount: number,
     phoneNumber: string,
     promoCode?: string | null,
-  ): Promise<{ code: string; status: string; message?: string }> {
-    return fetchJson(
+  ): Promise<DepositRequestResponse> {
+    return fetchJson<DepositRequestResponse>(
       buildUrl(API_CONFIG.backendUrl, "/api/Online/MobileMoneyDepositRequest"),
       {
         method: "POST",
         body: JSON.stringify({
+          phoneNumber: formatSmartBetPhone(phoneNumber) || phoneNumber,
           amount,
-          phoneNumber,
-          PromoCode: promoCode ?? null,
+          PromoCode: promoCode?.trim() ? promoCode.trim() : null,
         }),
       },
       API_CONFIG.paymentTimeoutMs,
@@ -414,14 +549,20 @@ export const smartBetApi = {
   async getDepositStatus(code: string): Promise<DepositStatusResponse> {
     return fetchJson<DepositStatusResponse>(
       buildUrl(API_CONFIG.backendUrl, `/api/Online/DepositStatus/${encodeURIComponent(code)}`),
+      {},
+      API_CONFIG.paymentTimeoutMs,
     );
   },
 
-  async redeemDeposit(code: string): Promise<{ balance: number; message?: string }> {
-    return fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Online/redeem"), {
-      method: "POST",
-      body: JSON.stringify({ code }),
-    });
+  async redeemDeposit(code: string): Promise<RedeemDepositResponse> {
+    return fetchJson<RedeemDepositResponse>(
+      buildUrl(API_CONFIG.backendUrl, "/api/Online/redeem"),
+      {
+        method: "POST",
+        body: JSON.stringify({ code: code.trim() }),
+      },
+      API_CONFIG.paymentTimeoutMs,
+    );
   },
 
   async requestWithdrawal(
@@ -429,6 +570,7 @@ export const smartBetApi = {
     amount: number,
     altPhone?: string,
   ): Promise<WithdrawResponse> {
+    const formattedAlt = altPhone ? formatSmartBetPhone(altPhone) : undefined;
     return fetchJson<WithdrawResponse>(
       buildUrl(API_CONFIG.backendUrl, "/api/Online/WithdrawRequest"),
       {
@@ -436,18 +578,15 @@ export const smartBetApi = {
         body: JSON.stringify({
           requestId,
           amount,
-          altPhone: altPhone || undefined,
+          ...(formattedAlt ? { altPhone: formattedAlt } : {}),
         }),
       },
       API_CONFIG.paymentTimeoutMs,
     );
   },
 
-  async confirmWithdrawalAlt(
-    challengeId: string,
-    otpCode: string,
-  ): Promise<{ status: string; message?: string }> {
-    return fetchJson(
+  async confirmWithdrawalAlt(challengeId: string, otpCode: string): Promise<WithdrawResponse> {
+    return fetchJson<WithdrawResponse>(
       buildUrl(API_CONFIG.backendUrl, "/api/Online/ConfirmWithdrawAlt"),
       {
         method: "POST",
@@ -457,11 +596,15 @@ export const smartBetApi = {
     );
   },
 
-  async withdrawAtBranch(amount: number): Promise<{ code: string; message?: string }> {
-    return fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Online/WithdrawAtBranch"), {
-      method: "POST",
-      body: JSON.stringify({ amount }),
-    });
+  async withdrawAtBranch(amount: number): Promise<WithdrawAtBranchResponse> {
+    return fetchJson<WithdrawAtBranchResponse>(
+      buildUrl(API_CONFIG.backendUrl, "/api/Online/WithdrawAtBranch"),
+      {
+        method: "POST",
+        body: JSON.stringify({ amount }),
+      },
+      API_CONFIG.paymentTimeoutMs,
+    );
   },
 
   // ── 7. Online Settings ────────────────────────────────────────────────────

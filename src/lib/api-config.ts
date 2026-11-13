@@ -18,10 +18,10 @@ export const API_CONFIG = {
     (typeof import.meta !== "undefined" && import.meta.env?.VITE_GAMES_BASE_URL) ||
     "https://api-games.smbet.net",
   backendUrl:
-    (typeof window !== "undefined"
+    typeof window !== "undefined"
       ? ""
-      : typeof import.meta !== "undefined" && import.meta.env?.VITE_BACKEND_URL) ||
-    "https://online.smartbet.ug",
+      : (typeof import.meta !== "undefined" && import.meta.env?.VITE_BACKEND_URL) ||
+        "https://online.smartbet.ug",
   liveGamesBaseUrl:
     (typeof import.meta !== "undefined" && import.meta.env?.VITE_LIVE_GAMES_BASE_URL) ||
     "wss://socket.smbet.net",

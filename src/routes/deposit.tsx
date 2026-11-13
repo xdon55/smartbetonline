@@ -6,7 +6,7 @@
  * - Real-time USSD Payment Status Polling (GET /api/Online/DepositStatus/{code})
  * - Resilient ledger synchronization with Supabase transactions and wallets
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
@@ -26,7 +26,7 @@ import { formatUgx } from "@/lib/betting-data";
 import { useWallet } from "@/hooks/use-wallet";
 import { useAuth } from "@/hooks/use-auth";
 import { internalDeposit } from "@/modules/wallet/wallet.functions";
-import { smartBetApi } from "@/lib/api-smartbet";
+import { ApiError, smartBetApi } from "@/lib/api-smartbet";
 import { recordWalletTransaction } from "@/lib/supabase-sportsbook";
 import { usePaymentPoller } from "@/hooks/use-payment-poller";
 
@@ -37,10 +37,13 @@ export const Route = createFileRoute("/deposit")({
       {
         name: "description",
         content:
-          "Top up your SMARTBET wallet instantly with MTN MoMo, Airtel Money or bank card in UGX.",
+          "Top up your SMARTBET wallet instantly with MTN MoMo, Airtel Money or shop voucher in UGX.",
       },
       { property: "og:title", content: "Deposit · SMARTBET" },
-      { property: "og:description", content: "Instant deposits with mobile money or card in UGX." },
+      {
+        property: "og:description",
+        content: "Instant deposits with mobile money or voucher in UGX.",
+      },
     ],
   }),
   component: DepositPage,
@@ -64,7 +67,7 @@ const methods = [
   {
     id: "voucher",
     name: "Shop Deposit",
-    note: "Get deposit code from shop cashier",
+    note: "Redeem deposit code from shop cashier",
     badge: "Shop",
     badgeClass: "bg-emerald-500 text-white font-black",
   },
@@ -74,19 +77,29 @@ const quickAmounts = [2000, 5000, 10000, 20000, 50000, 100000];
 
 function DepositPage() {
   const router = useRouter();
-  const { user } = useAuth();
-  const { balance, loading, refresh } = useWallet();
+  const { user, isAuthenticated } = useAuth();
+  const { balance, bonusBalance, phoneNumber, loading, refresh, syncBalance } = useWallet();
   const [method, setMethod] = useState("mtn");
   const [phone, setPhone] = useState("0772000000");
+  const [phoneEdited, setPhoneEdited] = useState(false);
   const [promoCode, setPromoCode] = useState("");
   const [amount, setAmount] = useState(10000);
   const [submitting, setSubmitting] = useState(false);
   const [voucherCode, setVoucherCode] = useState("");
   const [redeemingVoucher, setRedeemingVoucher] = useState(false);
 
+  useEffect(() => {
+    if (!phoneEdited && phoneNumber) {
+      setPhone(phoneNumber);
+    }
+  }, [phoneEdited, phoneNumber]);
+
   // Poller hook for real-time USSD tracking
-  const poller = usePaymentPoller((creditedAmount) => {
-    refresh();
+  const poller = usePaymentPoller((creditedAmount, newBal) => {
+    if (typeof newBal === "number") {
+      syncBalance(newBal);
+    }
+    void refresh();
     toast.success(`Deposit confirmed! ${formatUgx(creditedAmount)} credited to your wallet.`);
   });
 
@@ -94,29 +107,34 @@ function DepositPage() {
     e.preventDefault();
     const cleanCode = voucherCode.trim().toUpperCase();
     if (!cleanCode) {
-      toast.error("Please enter a voucher code");
+      toast.error("Please enter a deposit voucher code");
       return;
     }
 
     setRedeemingVoucher(true);
     try {
       const res = await smartBetApi.redeemDeposit(cleanCode);
-      const credited = (res as { amount?: number })?.amount || 25000;
-      refresh();
+      const credited = res?.amount || 25000;
+      const updatedBal = typeof res?.balance === "number" ? res.balance : res?.Balance;
+      if (typeof updatedBal === "number") {
+        syncBalance(updatedBal);
+      }
+      void refresh();
 
-      // Mirror into Supabase
-      try {
-        const userId = user?.id || "guest_player";
-        await recordWalletTransaction({
-          userId,
-          type: "deposit",
-          direction: "credit",
-          amount: credited,
-          reference: `VOUCHER:${cleanCode}`,
-          metadata: { method: "voucher", code: cleanCode, status: "completed" },
-        });
-      } catch (logErr) {
-        console.warn("[Voucher] Supabase log notice:", logErr);
+      // Mirror into Supabase when authenticated
+      if (isAuthenticated && user?.id) {
+        try {
+          await recordWalletTransaction({
+            userId: user.id,
+            type: "deposit",
+            direction: "credit",
+            amount: credited,
+            reference: `VOUCHER:${cleanCode}`,
+            metadata: { method: "voucher", code: cleanCode, status: "completed" },
+          });
+        } catch (logErr) {
+          console.warn("[Voucher] Supabase log notice:", logErr);
+        }
       }
 
       toast.success(
@@ -137,50 +155,56 @@ function DepositPage() {
       toast.error("Minimum deposit is UGX 1,000");
       return;
     }
+    if (phone.replace(/\D/g, "").length < 9) {
+      toast.error("Please enter a valid mobile money phone number");
+      return;
+    }
 
     setSubmitting(true);
 
     try {
-      // 1. Request deposit via SmartBet Mobile Money API
-      let code = "";
-      try {
-        const res = await smartBetApi.requestMobileMoneyDeposit(amount, phone, promoCode || null);
-        code = res.code || `DEP-${Date.now().toString(36).toUpperCase()}`;
-      } catch (apiErr) {
-        console.warn("[Deposit] Real API notice, using fallback reference:", apiErr);
-        code = `DEP-${Date.now().toString(36).toUpperCase()}`;
-      }
+      // 1. Request deposit via SmartBet Mobile Money API (POST /api/Online/MobileMoneyDepositRequest)
+      const res = await smartBetApi.requestMobileMoneyDeposit(amount, phone, promoCode || null);
+      const code =
+        res.code || res.transactionCode || `DEP-${Date.now().toString(36).toUpperCase()}`;
 
-      // 2. Mirror into internal PostgreSQL ledger via server function
-      try {
-        await (
-          internalDeposit as unknown as (args: {
-            data: { amount: number; reference?: string };
-          }) => Promise<{ transactionId: string }>
-        )({ data: { amount, reference: `${method.toUpperCase()}:${code}` } });
-      } catch {
-        // Safe if offline
+      // 2. Mirror into internal PostgreSQL ledger via server function if signed in
+      if (isAuthenticated) {
+        try {
+          await (
+            internalDeposit as unknown as (args: {
+              data: { amount: number; reference?: string };
+            }) => Promise<{ transactionId: string }>
+          )({ data: { amount, reference: `${method.toUpperCase()}:${code}` } });
+        } catch {
+          // Safe if offline
+        }
       }
 
       // 3. Record pending transaction in Supabase
-      try {
-        const userId = user?.id || "guest_player";
-        await recordWalletTransaction({
-          userId,
-          type: "deposit",
-          direction: "credit",
-          amount,
-          reference: code,
-          metadata: { phone, method, promoCode, status: "pending" },
-        });
-      } catch (txErr) {
-        console.warn("[Deposit] Supabase transaction record notice:", txErr);
+      if (isAuthenticated && user?.id) {
+        try {
+          await recordWalletTransaction({
+            userId: user.id,
+            type: "deposit",
+            direction: "credit",
+            amount,
+            reference: code,
+            metadata: { phone, method, promoCode, status: "pending" },
+          });
+        } catch (txErr) {
+          console.warn("[Deposit] Supabase transaction record notice:", txErr);
+        }
       }
 
-      // 4. Start real-time USSD polling with 90s countdown
+      // 4. Start real-time USSD polling (GET /api/Online/DepositStatus/{code})
       poller.startPolling(code, amount, phone, method);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Deposit failed");
+      if (err instanceof ApiError && err.status && err.status >= 400 && err.status < 500) {
+        toast.error(err.message);
+      } else {
+        toast.error(err instanceof Error ? err.message : "Deposit request failed");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -196,6 +220,11 @@ function DepositPage() {
             <span className="font-bold text-foreground">
               {loading ? "—" : formatUgx(balance ?? 0)}
             </span>
+            {bonusBalance > 0 && (
+              <span className="ml-2 text-accent font-semibold">
+                · Bonus {formatUgx(bonusBalance)}
+              </span>
+            )}
           </p>
         </div>
         <Link
@@ -465,7 +494,10 @@ function DepositPage() {
                   id="dep-phone"
                   inputMode="tel"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => {
+                    setPhoneEdited(true);
+                    setPhone(e.target.value);
+                  }}
                   placeholder="0772 000 000"
                   required
                 />

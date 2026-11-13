@@ -18,6 +18,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { smartBetApi } from "@/lib/api-smartbet";
 import { supabase } from "@/integrations/supabase/client";
 import { syncUserProfile } from "@/lib/supabase-sportsbook";
+import { useWallet } from "@/hooks/use-wallet";
+import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/auth")({
   head: () => ({
@@ -40,6 +42,8 @@ export const Route = createFileRoute("/auth")({
 
 function AuthPage() {
   const router = useRouter();
+  const { refreshAuth } = useAuth();
+  const { refresh } = useWallet();
   const [agree, setAgree] = useState(false);
   const [pending, setPending] = useState(false);
 
@@ -136,6 +140,8 @@ function AuthPage() {
         );
       }
 
+      await refreshAuth();
+      await refresh();
       toast.success("Welcome back to SMARTBET!");
       router.navigate({ to: "/" });
     } catch (err) {
@@ -237,6 +243,8 @@ function AuthPage() {
         }),
       );
 
+      await refreshAuth();
+      await refresh();
       if (requiresOtp) {
         setRegStep("otp");
         toast.info(`Verification code sent to ${phone}`);
@@ -265,6 +273,8 @@ function AuthPage() {
         confirmPassword: regData.pass,
       });
 
+      await refreshAuth();
+      await refresh();
       setRegStep("success");
       toast.success("Phone verified and account activated!");
     } catch (err) {

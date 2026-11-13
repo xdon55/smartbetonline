@@ -1,128 +1,13 @@
 /**
  * hooks/use-wallet.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * Fetches the signed-in user's wallet balance and recent transaction history.
- * Supports both SmartBet Online UserInfo API (GET /api/Online/UserInfo)
- * and internal PostgreSQL ledger entries via Supabase.
+ * Hook reading the global reactive WalletProvider state.
+ * Keeps balance, bonus wallet, official statements, and ledger transactions
+ * synchronized across the entire application.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { useEffect, useState, useCallback } from "react";
-import {
-  getWalletBalance,
-  getWalletTransactions,
-  type WalletTransaction,
-} from "@/modules/wallet/wallet.functions";
-import { useAuth } from "./use-auth";
-import { smartBetApi } from "@/lib/api-smartbet";
-import { supabase } from "@/integrations/supabase/client";
+import { useWalletContext } from "@/lib/wallet-context";
 
 export function useWallet() {
-  const { isAuthenticated, user } = useAuth();
-  const [balance, setBalance] = useState<number | null>(null);
-  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
-
-  useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-
-    async function load() {
-      // 1. First check SmartBet Online UserInfo API
-      try {
-        const userInfo = await smartBetApi.getUserInfo();
-        if (mounted && userInfo && typeof userInfo.Balance === "number") {
-          setBalance(userInfo.Balance);
-          setLoading(false);
-          return;
-        }
-      } catch {
-        // User not logged into SmartBet session or API offline
-      }
-
-      // 2. Check Supabase internal ledger balance if authenticated
-      if (!isAuthenticated || !user) {
-        // Check if there is an active local user session
-        const storedUser = localStorage.getItem("smartbet_active_user");
-        if (storedUser) {
-          try {
-            const parsed = JSON.parse(storedUser);
-            if (typeof parsed.Balance === "number") {
-              setBalance(parsed.Balance);
-              setLoading(false);
-              return;
-            }
-          } catch {
-            // Ignore parse error
-          }
-        }
-        setBalance(null);
-        setTransactions([]);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        let bal: number | null = null;
-        let txs: WalletTransaction[] = [];
-
-        try {
-          bal = await getWalletBalance();
-          txs = await (
-            getWalletTransactions as unknown as (args: {
-              data?: { cursor?: string; limit?: number };
-            }) => Promise<WalletTransaction[]>
-          )({ data: {} });
-        } catch {
-          // Fallback: Query Supabase transactions table directly
-          const { data: dbTxs } = await supabase
-            .from("transactions")
-            .select("*")
-            .eq("user_id", user.id)
-            .order("created_at", { ascending: false })
-            .limit(50);
-
-          if (dbTxs && dbTxs.length > 0) {
-            txs = dbTxs.map((row) => ({
-              id: row.id,
-              type: row.type,
-              status: row.status,
-              direction: row.direction,
-              amount: Number(row.amount),
-              currency: row.currency,
-              reference: row.reference,
-              metadata: (row.metadata || {}) as Record<string, string | number | boolean | null>,
-              created_at: row.created_at,
-            }));
-
-            // Compute balance from transactions
-            let computed = 0;
-            for (const t of txs) {
-              if (t.direction === "credit") computed += t.amount;
-              else if (t.direction === "debit") computed -= t.amount;
-            }
-            bal = Math.max(0, computed);
-          }
-        }
-
-        if (mounted) {
-          if (bal !== null) setBalance(bal);
-          setTransactions(txs);
-        }
-      } catch (e) {
-        console.warn("Wallet ledger load fallback:", e);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      mounted = false;
-    };
-  }, [isAuthenticated, user, refreshKey]);
-
-  return { balance, transactions, loading, refresh };
+  return useWalletContext();
 }

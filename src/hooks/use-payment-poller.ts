@@ -44,6 +44,11 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeCodeRef = useRef<string | null>(null);
+  const onSuccessRef = useRef(onSuccess);
+
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
 
   const cleanup = useCallback(() => {
     if (pollTimerRef.current) {
@@ -63,7 +68,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
 
       try {
         const res: DepositStatusResponse = await smartBetApi.getDepositStatus(code);
-        const remoteStatus = (res?.status || "").toUpperCase();
+        const remoteStatus = String(res?.status || res?.Status || "").toUpperCase();
 
         if (
           remoteStatus === "SUCCESSFUL" ||
@@ -84,8 +89,8 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
             finalBalance: res.balance,
           }).catch(console.warn);
 
-          if (onSuccess) {
-            onSuccess(currentAmount, res.balance);
+          if (onSuccessRef.current) {
+            onSuccessRef.current(res.amount || currentAmount, res.balance);
           }
           return;
         }
@@ -109,13 +114,13 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
           return;
         }
 
-        // Still PENDING or OTP -> queue next poll check
+        // Still PENDING, OTP, or UNKNOWN -> queue next poll check
         if (activeCodeRef.current === code) {
           pollTimerRef.current = setTimeout(() => {
             checkStatus(code, currentAmount);
           }, POLLING_INTERVAL_MS);
         }
-      } catch (err) {
+      } catch {
         // Network blip; retry polling until countdown ends
         if (activeCodeRef.current === code) {
           pollTimerRef.current = setTimeout(() => {
@@ -124,7 +129,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
         }
       }
     },
-    [cleanup, onSuccess],
+    [cleanup],
   );
 
   const startPolling = useCallback(
@@ -169,6 +174,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
 
   const checkNow = useCallback(() => {
     if (state.code) {
+      activeCodeRef.current = state.code;
       checkStatus(state.code, state.amount);
     }
   }, [state.code, state.amount, checkStatus]);
@@ -196,7 +202,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
   return {
     ...state,
     startPolling,
-    cancelPolling: cleanup,
+    cancelPolling: reset,
     checkNow,
     reset,
     isWaitingApproval: state.status === "prompt_sent" || state.status === "polling",

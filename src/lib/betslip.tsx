@@ -21,9 +21,9 @@ import {
   useEffect,
   type ReactNode,
 } from "react";
-import { smartBetApi, type TicketPayload, type OnlineSettings } from "./api-smartbet";
+import { ApiError, smartBetApi, type TicketPayload, type OnlineSettings } from "./api-smartbet";
 import { formatUgx } from "./betting-data";
-import { supabase } from "@/integrations/supabase/client";
+import { useWalletContext } from "./wallet-context";
 import {
   saveBookingCode,
   retrieveBookingCode,
@@ -146,6 +146,7 @@ const initialBets: PlacedBet[] = [
 
 /** Provider mounted once in src/routes/__root.tsx around the whole app. */
 export function BetSlipProvider({ children }: { children: ReactNode }) {
+  const { balance, syncBalance, refresh: refreshWallet } = useWalletContext();
   const [selections, setSelections] = useState<Selection[]>([]);
   const [stake, setStake] = useState(2000); // default stake in UGX
   const [open, setOpen] = useState(false);
@@ -391,6 +392,9 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     if (totalReturnWithBonus > settings.MaxPayOut) {
       throw new Error(`Maximum payout limit is ${formatUgx(settings.MaxPayOut)}`);
     }
+    if (balance !== null && stake > balance) {
+      throw new Error(`Insufficient wallet balance (${formatUgx(balance)} available)`);
+    }
 
     setLoading(true);
     const payload = buildTicketPayload();
@@ -404,19 +408,31 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
 
       try {
         const res = await smartBetApi.submitTicket(payload);
+        const resObj = res as Record<string, unknown>;
         ticketId = String(
-          res.receiptId ||
-            (res as Record<string, unknown>).ReceiptId ||
-            `b-${Math.floor(Math.random() * 9000) + 1000}`,
+          res.receiptId || resObj.ReceiptId || `b-${Math.floor(Math.random() * 9000) + 1000}`,
         );
         code = String(
-          (res as Record<string, unknown>).bookingCode ||
-            (res as Record<string, unknown>).BookingCode ||
+          res.bookingCode ||
+            resObj.BookingCode ||
             `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
         );
-      } catch {
-        ticketId = `b-${Math.floor(Math.random() * 9000) + 1000}`;
-        code = `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+        const remoteBalance =
+          typeof res.balance === "number"
+            ? res.balance
+            : typeof resObj.Balance === "number"
+              ? (resObj.Balance as number)
+              : null;
+        if (remoteBalance !== null) {
+          syncBalance(remoteBalance);
+        } else if (typeof balance === "number") {
+          syncBalance(Math.max(0, balance - stake));
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status && err.status >= 400 && err.status < 500) {
+          throw err;
+        }
+        throw err instanceof Error ? err : new Error("Failed to submit bet ticket");
       }
 
       const placed: PlacedBet = {
@@ -452,11 +468,24 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
         console.warn("[BetSlip] Supabase bet ticket persistence notice:", err);
       }
 
+      // Refresh wallet balance & statement
+      await refreshWallet();
+
       return placed;
     } finally {
       setLoading(false);
     }
-  }, [selections, buildTicketPayload, totalOdds, stake, settings, totalReturnWithBonus]);
+  }, [
+    selections,
+    buildTicketPayload,
+    totalOdds,
+    stake,
+    balance,
+    settings,
+    totalReturnWithBonus,
+    syncBalance,
+    refreshWallet,
+  ]);
 
   /**
    * Retrieves a booking code from Supabase / API and restores selections to slip.

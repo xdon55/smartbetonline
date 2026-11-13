@@ -61,13 +61,134 @@ export interface ServerTicket {
   selections: ServerTicketLeg[];
 }
 
+export interface ProxyStatementRow {
+  TransactionId: string;
+  Date: string;
+  Type: string;
+  Amount: number;
+  Balance: number;
+  Description: string;
+}
+
+export interface ProxyBonusTransaction {
+  Id: string;
+  Date: string;
+  Type: string;
+  Amount: number;
+  Description: string;
+}
+
 const userSessions = new Map<string, ProxySessionUser>();
 const depositTransactions = new Map<
   string,
-  { code: string; amount: number; phone: string; status: string; createdAt: string }
+  {
+    code: string;
+    amount: number;
+    phone: string;
+    promoCode: string | null;
+    status: "OTP" | "PENDING" | "UNKNOWN" | "SUCCESSFUL" | "FAILED" | "REJECTED";
+    credited: boolean;
+    userId: string;
+    createdAt: string;
+  }
 >();
 
+const withdrawalChallenges = new Map<
+  string,
+  {
+    challengeId: string;
+    requestId: string;
+    amount: number;
+    altPhone?: string;
+    status: "OTP" | "PENDING" | "UNKNOWN" | "SUCCESSFUL" | "FAILED" | "REJECTED";
+    transactionId?: string;
+    userId: string;
+    createdAt: string;
+  }
+>();
+const withdrawalByRequestId = new Map<string, string>();
+const redeemedVoucherCodes = new Set<string>();
+const userStatementsStore = new Map<string, ProxyStatementRow[]>();
+const userBonusTransactionsStore = new Map<string, ProxyBonusTransaction[]>();
+
 const serverTicketsStore = new Map<string, ServerTicket[]>();
+
+function getUserStatement(user: ProxySessionUser): ProxyStatementRow[] {
+  let rows = userStatementsStore.get(user.UserId);
+  if (!rows) {
+    rows = [
+      {
+        TransactionId: "ST-88129",
+        Date: new Date(Date.now() - 3600000).toISOString(),
+        Type: "Deposit",
+        Amount: 25000,
+        Balance: user.Balance,
+        Description: "MTN Mobile Money Deposit",
+      },
+      {
+        TransactionId: "ST-88114",
+        Date: new Date(Date.now() - 86400000).toISOString(),
+        Type: "Bet Stake",
+        Amount: -5000,
+        Balance: Math.max(0, user.Balance - 25000),
+        Description: "Multi-Bet Ticket #SB-9182",
+      },
+      {
+        TransactionId: "ST-88092",
+        Date: new Date(Date.now() - 172800000).toISOString(),
+        Type: "Payout",
+        Amount: 34500,
+        Balance: Math.max(0, user.Balance - 20000),
+        Description: "Winnings credited: Ticket #SB-8741",
+      },
+    ];
+    userStatementsStore.set(user.UserId, rows);
+  }
+  return rows;
+}
+
+function appendStatementRow(
+  user: ProxySessionUser,
+  type: string,
+  amount: number,
+  description: string,
+): ProxyStatementRow {
+  const rows = getUserStatement(user);
+  const entry: ProxyStatementRow = {
+    TransactionId: `ST-${Math.floor(10000 + Math.random() * 90000)}`,
+    Date: new Date().toISOString(),
+    Type: type,
+    Amount: amount,
+    Balance: user.Balance,
+    Description: description,
+  };
+  rows.unshift(entry);
+  return entry;
+}
+
+function getUserBonusTransactions(user: ProxySessionUser): ProxyBonusTransaction[] {
+  let txs = userBonusTransactionsStore.get(user.UserId);
+  if (!txs) {
+    txs = [
+      {
+        Id: "BTX-1001",
+        Date: new Date(Date.now() - 86400000 * 2).toISOString(),
+        Type: "Welcome Bonus",
+        Amount: 10000,
+        Description: "100% Sports Welcome Bonus credited",
+      },
+      {
+        Id: "BTX-1002",
+        Date: new Date(Date.now() - 86400000).toISOString(),
+        Type: "Accumulator Boost",
+        Amount: 5000,
+        Description: "Weekly Multi-Bet Accumulator Boost",
+      },
+    ];
+    userBonusTransactionsStore.set(user.UserId, txs);
+  }
+  return txs;
+}
 
 const defaultDemoTickets: ServerTicket[] = [
   {
@@ -141,7 +262,8 @@ function jsonResponse(data: unknown, status = 200, headers: Record<string, strin
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Cookie",
+      "Access-Control-Allow-Headers":
+        "Content-Type, Authorization, X-Requested-With, Cookie, X-SmartBet-Session",
       ...headers,
     },
   });
@@ -168,7 +290,8 @@ export async function handleApiProxy(request: Request): Promise<Response> {
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Cookie",
+        "Access-Control-Allow-Headers":
+          "Content-Type, Authorization, X-Requested-With, Cookie, X-SmartBet-Session",
         "Access-Control-Max-Age": "86400",
       },
     });
@@ -198,12 +321,47 @@ export async function handleApiProxy(request: Request): Promise<Response> {
     }
   }
 
+  const cookies = parseCookies(request.headers.get("cookie"));
+  const headerSessionId = request.headers.get("x-smartbet-session")?.trim() || "";
+  const cookieSessionId = cookies["smartbet_session"]?.trim() || "";
+  const isHttps = url.protocol === "https:" || request.headers.get("x-forwarded-proto") === "https";
+  const cookieFlags = isHttps
+    ? "Path=/; HttpOnly; SameSite=None; Secure; Max-Age=2592000"
+    : "Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000";
+  const clearFlags = isHttps
+    ? "Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0"
+    : "Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+
+  // ── Route: /api/Account/LogOff (always wipe proxy & cookie session) ───────
+  if (subpath === "/api/Account/LogOff" && request.method === "POST") {
+    if (cookieSessionId) userSessions.delete(cookieSessionId);
+    if (headerSessionId) userSessions.delete(headerSessionId);
+    // Notify upstream best-effort without allowing upstream failure/response to keep local session alive
+    try {
+      const forwardHeaders = new Headers();
+      if (request.headers.get("cookie")) {
+        forwardHeaders.set("cookie", request.headers.get("cookie")!);
+      }
+      forwardHeaders.set("Host", "online.smartbet.ug");
+      await fetch(targetUrl.toString(), {
+        method: "POST",
+        headers: forwardHeaders,
+        redirect: "manual",
+      }).catch(() => {});
+    } catch {
+      // Ignore upstream errors on signout
+    }
+    return jsonResponse({ success: true }, 200, {
+      "Set-Cookie": `smartbet_session=; ${clearFlags}`,
+    });
+  }
+
   // 1. Attempt forward to live SmartBet online backend
   try {
     const forwardHeaders = new Headers();
     request.headers.forEach((value, key) => {
       const lower = key.toLowerCase();
-      if (!["host", "connection", "content-length"].includes(lower)) {
+      if (!["host", "connection", "content-length", "x-smartbet-session"].includes(lower)) {
         forwardHeaders.set(key, value);
       }
     });
@@ -227,7 +385,15 @@ export async function handleApiProxy(request: Request): Promise<Response> {
     const ct = upstreamRes.headers.get("content-type") || "";
     if (upstreamRes.status !== 404 && ct.includes("application/json")) {
       const upstreamBody = await upstreamRes.arrayBuffer();
-      const responseHeaders = new Headers(upstreamRes.headers);
+      const responseHeaders = new Headers();
+      upstreamRes.headers.forEach((value, key) => {
+        const lower = key.toLowerCase();
+        if (
+          !["content-encoding", "content-length", "transfer-encoding", "connection"].includes(lower)
+        ) {
+          responseHeaders.set(key, value);
+        }
+      });
       responseHeaders.set("Access-Control-Allow-Origin", "*");
       return new Response(upstreamBody, {
         status: upstreamRes.status,
@@ -239,27 +405,31 @@ export async function handleApiProxy(request: Request): Promise<Response> {
   }
 
   // 2. Resilient API Fallback (strictly conforms to SmartBet Online API spec)
-  const cookies = parseCookies(request.headers.get("cookie"));
-  const sessionId = cookies["smartbet_session"] || "demo_user";
-  const currentUser = userSessions.get(sessionId) || serverUsers.get(sessionId) || null;
+  const sessionId = cookieSessionId || headerSessionId;
+  const currentUser = sessionId ? userSessions.get(sessionId) || null : null;
 
   // ── Route: /api/Account/Login ──────────────────────────────────────────────
   if (subpath === "/api/Account/Login" && request.method === "POST") {
     const username = String(bodyJson?.["username"] || "").trim();
     const phone = username.startsWith("256") || /^\d+$/.test(username) ? username : "256700000000";
 
-    const user: ProxySessionUser = {
-      AccountId: `SB-${Math.floor(10000 + Math.random() * 90000)}`,
-      UserId: `usr-${Date.now().toString(36)}`,
-      UserName: username || "bettor",
-      PhoneNumber: phone,
-      Balance: 75000,
-      BonusBalance: 10000,
-    };
+    let user = username ? serverUsers.get(username) : undefined;
+    if (!user) {
+      user = {
+        AccountId: `SB-${Math.floor(10000 + Math.random() * 90000)}`,
+        UserId: `usr-${Date.now().toString(36)}`,
+        UserName: username || "bettor",
+        PhoneNumber: phone,
+        Balance: 75000,
+        BonusBalance: 10000,
+      };
+      if (username) {
+        serverUsers.set(username, user);
+      }
+    }
 
     const newSessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     userSessions.set(newSessionId, user);
-    serverUsers.set(username, user);
 
     return jsonResponse(
       {
@@ -269,10 +439,11 @@ export async function handleApiProxy(request: Request): Promise<Response> {
         PhoneNumber: user.PhoneNumber,
         Balance: user.Balance,
         BonusBalance: user.BonusBalance,
+        SessionId: newSessionId,
       },
       200,
       {
-        "Set-Cookie": `smartbet_session=${newSessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`,
+        "Set-Cookie": `smartbet_session=${newSessionId}; ${cookieFlags}`,
       },
     );
   }
@@ -291,16 +462,6 @@ export async function handleApiProxy(request: Request): Promise<Response> {
     }
     const strict = url.searchParams.get("strict401") === "true";
     return new Response(null, { status: strict ? 401 : 204 });
-  }
-
-  // ── Route: /api/Account/LogOff ─────────────────────────────────────────────
-  if (subpath === "/api/Account/LogOff" && request.method === "POST") {
-    if (cookies["smartbet_session"]) {
-      userSessions.delete(cookies["smartbet_session"]);
-    }
-    return jsonResponse({ success: true }, 200, {
-      "Set-Cookie": `smartbet_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
-    });
   }
 
   // ── Route: /api/Account/CheckUsername & CheckPhone ─────────────────────────
@@ -342,6 +503,12 @@ export async function handleApiProxy(request: Request): Promise<Response> {
     userSessions.set(newSessionId, newUser);
     serverUsers.set(username, newUser);
 
+    const isHttps =
+      url.protocol === "https:" || request.headers.get("x-forwarded-proto") === "https";
+    const cookieFlags = isHttps
+      ? "Path=/; HttpOnly; SameSite=None; Secure; Max-Age=2592000"
+      : "Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000";
+
     return jsonResponse(
       {
         success: true,
@@ -350,38 +517,58 @@ export async function handleApiProxy(request: Request): Promise<Response> {
         UserName: newUser.UserName,
         PhoneNumber: newUser.PhoneNumber,
         Balance: newUser.Balance,
+        SessionId: newSessionId,
         expiresInSeconds: 300,
       },
       200,
       {
-        "Set-Cookie": `smartbet_session=${newSessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`,
+        "Set-Cookie": `smartbet_session=${newSessionId}; ${cookieFlags}`,
       },
     );
   }
 
   // ── Route: /api/Online/UserInfo ────────────────────────────────────────────
   if (subpath === "/api/Online/UserInfo") {
-    const activeUser = currentUser || serverUsers.get("demo_user")!;
+    if (!currentUser) {
+      return jsonResponse({ message: "Authentication required." }, 401);
+    }
     return jsonResponse({
-      AccountId: activeUser.AccountId,
-      UserId: activeUser.UserId,
-      UserName: activeUser.UserName,
-      PhoneNumber: activeUser.PhoneNumber,
-      Balance: activeUser.Balance,
+      AccountId: currentUser.AccountId,
+      UserId: currentUser.UserId,
+      UserName: currentUser.UserName,
+      PhoneNumber: currentUser.PhoneNumber,
+      Balance: currentUser.Balance,
+      BonusBalance: currentUser.BonusBalance,
     });
   }
 
   // ── Route: /api/Online/MobileMoneyDepositRequest ───────────────────────────
   if (subpath === "/api/Online/MobileMoneyDepositRequest" && request.method === "POST") {
-    const amount = Number(bodyJson?.["amount"]) || 10000;
-    const phone = String(bodyJson?.["phoneNumber"] || "256700000000");
+    if (!currentUser) {
+      return jsonResponse({ message: "Please sign in to make a deposit." }, 401);
+    }
+    const activeUser = currentUser;
+    const amount = Number(bodyJson?.["amount"]);
+    const phone = String(bodyJson?.["phoneNumber"] || "").trim();
+    const promoCode = bodyJson?.["PromoCode"] ? String(bodyJson["PromoCode"]).trim() : null;
+
+    if (!Number.isFinite(amount) || amount < 1000) {
+      return jsonResponse({ message: "Minimum mobile money deposit is UGX 1,000." }, 400);
+    }
+    if (!phone || phone.replace(/\D/g, "").length < 9) {
+      return jsonResponse({ message: "Please provide a valid mobile money phone number." }, 400);
+    }
+
     const code = `MM-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
 
     depositTransactions.set(code, {
       code,
       amount,
       phone,
+      promoCode,
       status: "PENDING",
+      credited: false,
+      userId: activeUser.UserId,
       createdAt: new Date().toISOString(),
     });
 
@@ -396,80 +583,215 @@ export async function handleApiProxy(request: Request): Promise<Response> {
 
   // ── Route: /api/Online/DepositStatus/:code ─────────────────────────────────
   if (subpath.startsWith("/api/Online/DepositStatus/")) {
-    const code = subpath.replace("/api/Online/DepositStatus/", "").trim();
+    if (!currentUser) {
+      return jsonResponse({ message: "Authentication required." }, 401);
+    }
+    const activeUser = currentUser;
+    const code = decodeURIComponent(subpath.replace("/api/Online/DepositStatus/", "")).trim();
     const tx = depositTransactions.get(code);
 
-    let currentStatus = "SUCCESSFUL";
-    if (tx) {
-      const elapsedMs = Date.now() - new Date(tx.createdAt).getTime();
-      // Keep PENDING for first 3.5 seconds to simulate telecom network prompt transit
-      if (elapsedMs < 3500) {
-        currentStatus = "PENDING";
-      } else {
-        tx.status = "SUCCESSFUL";
-        if (currentUser) {
-          currentUser.Balance += tx.amount;
-        }
+    if (!tx) {
+      return jsonResponse({
+        code,
+        status: "UNKNOWN",
+        amount: 0,
+        balance: activeUser.Balance,
+        updateTime: new Date().toISOString(),
+      });
+    }
+
+    const elapsedMs = Date.now() - new Date(tx.createdAt).getTime();
+    if (elapsedMs < 3000) {
+      tx.status = "PENDING";
+    } else if (!tx.credited) {
+      tx.status = "SUCCESSFUL";
+      tx.credited = true;
+      activeUser.Balance += tx.amount;
+      appendStatementRow(activeUser, "Deposit", tx.amount, `Mobile Money Deposit (${tx.code})`);
+
+      if (tx.promoCode) {
+        const bonusCredit = Math.min(25000, Math.round(tx.amount * 0.1));
+        activeUser.BonusBalance += bonusCredit;
+        const bTxs = getUserBonusTransactions(activeUser);
+        bTxs.unshift({
+          Id: `BTX-${Date.now().toString(36).toUpperCase()}`,
+          Date: new Date().toISOString(),
+          Type: "Promo Deposit Bonus",
+          Amount: bonusCredit,
+          Description: `10% Promo boost (${tx.promoCode}) on ${tx.code}`,
+        });
       }
     }
 
-    const amount = tx ? tx.amount : 10000;
-    const activeBalance = currentUser ? currentUser.Balance : 145000;
-
     return jsonResponse({
-      code,
-      status: currentStatus,
-      amount,
-      balance: activeBalance,
+      code: tx.code,
+      status: tx.status,
+      amount: tx.amount,
+      balance: activeUser.Balance,
       updateTime: new Date().toISOString(),
     });
   }
 
   // ── Route: /api/Online/WithdrawRequest ─────────────────────────────────────
   if (subpath === "/api/Online/WithdrawRequest" && request.method === "POST") {
-    const amount = Number(bodyJson?.["amount"]) || 5000;
-    const requestId = String(bodyJson?.["requestId"] || `wdr-${Date.now()}`);
+    if (!currentUser) {
+      return jsonResponse({ message: "Please sign in to withdraw funds." }, 401);
+    }
+    const activeUser = currentUser;
+    const amount = Number(bodyJson?.["amount"]);
+    const requestId = String(bodyJson?.["requestId"] || "").trim();
+    const altPhone = bodyJson?.["altPhone"] ? String(bodyJson["altPhone"]).trim() : undefined;
+
+    if (!requestId) {
+      return jsonResponse({ message: "Missing withdrawal requestId." }, 400);
+    }
+    if (!Number.isFinite(amount) || amount < 2000) {
+      return jsonResponse({ message: "Minimum withdrawal is UGX 2,000." }, 400);
+    }
+
+    // Idempotency by requestId
+    const existingChallengeId = withdrawalByRequestId.get(requestId);
+    if (existingChallengeId) {
+      const existing = withdrawalChallenges.get(existingChallengeId);
+      if (existing) {
+        return jsonResponse({
+          status: existing.status,
+          challengeId: existing.challengeId,
+          transactionId: existing.transactionId,
+          amount: existing.amount,
+          balance: activeUser.Balance,
+          message:
+            existing.status === "OTP"
+              ? "Security check: 6-digit confirmation code dispatched via SMS."
+              : "Withdrawal request already processed.",
+        });
+      }
+    }
+
+    if (activeUser.Balance < amount) {
+      return jsonResponse(
+        {
+          status: "REJECTED",
+          message: `Insufficient balance (${activeUser.Balance.toLocaleString()} UGX available).`,
+        },
+        417,
+      );
+    }
 
     // Require SMS OTP verification challenge
     const challengeId = `CH-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    withdrawalChallenges.set(challengeId, {
+      challengeId,
+      requestId,
+      amount,
+      altPhone,
+      status: "OTP",
+      userId: activeUser.UserId,
+      createdAt: new Date().toISOString(),
+    });
+    withdrawalByRequestId.set(requestId, challengeId);
 
     return jsonResponse({
       status: "OTP",
       challengeId,
       amount,
       requestId,
+      balance: activeUser.Balance,
       message: "Security check: 6-digit confirmation code dispatched via SMS.",
     });
   }
 
   // ── Route: /api/Online/ConfirmWithdrawAlt ──────────────────────────────────
   if (subpath === "/api/Online/ConfirmWithdrawAlt" && request.method === "POST") {
+    if (!currentUser) {
+      return jsonResponse({ message: "Please sign in to confirm withdrawal." }, 401);
+    }
+    const activeUser = currentUser;
+    const challengeId = String(bodyJson?.["challengeId"] || "").trim();
     const otpCode = String(bodyJson?.["otpCode"] || "").trim();
 
-    if (currentUser) {
-      currentUser.Balance = Math.max(0, currentUser.Balance - 5000);
+    if (!challengeId || otpCode.length < 4) {
+      return jsonResponse({ message: "Valid challengeId and OTP code are required." }, 400);
     }
+    if (otpCode === "000000") {
+      return jsonResponse({ status: "FAILED", message: "Invalid OTP verification code." }, 417);
+    }
+
+    const challenge = withdrawalChallenges.get(challengeId);
+    if (!challenge) {
+      return jsonResponse(
+        { status: "FAILED", message: "Withdrawal session expired or not found." },
+        417,
+      );
+    }
+    if (challenge.status === "SUCCESSFUL") {
+      return jsonResponse({
+        status: "SUCCESSFUL",
+        transactionId: challenge.transactionId,
+        amount: challenge.amount,
+        balance: activeUser.Balance,
+        message: "Withdrawal already confirmed.",
+      });
+    }
+    if (activeUser.Balance < challenge.amount) {
+      challenge.status = "REJECTED";
+      return jsonResponse(
+        { status: "REJECTED", message: "Insufficient wallet balance to complete withdrawal." },
+        417,
+      );
+    }
+
+    activeUser.Balance -= challenge.amount;
+    const transactionId = `TX-WDR-${Date.now().toString(36).toUpperCase()}`;
+    challenge.status = "SUCCESSFUL";
+    challenge.transactionId = transactionId;
+
+    appendStatementRow(
+      activeUser,
+      "Withdrawal",
+      -challenge.amount,
+      `Mobile Money Withdrawal (${challenge.altPhone || activeUser.PhoneNumber})`,
+    );
 
     return jsonResponse({
       status: "SUCCESSFUL",
       message: "Withdrawal verified. Payout dispatched to your Mobile Money account.",
-      transactionId: `TX-WDR-${Date.now().toString(36).toUpperCase()}`,
-      otpCode,
+      transactionId,
+      amount: challenge.amount,
+      balance: activeUser.Balance,
     });
   }
 
   // ── Route: /api/Online/WithdrawAtBranch ────────────────────────────────────
   if (subpath === "/api/Online/WithdrawAtBranch" && request.method === "POST") {
-    const amount = Number(bodyJson?.["amount"]) || 10000;
-    const code = `BR-${Math.floor(100000 + Math.random() * 900000)}`;
-
-    if (currentUser) {
-      currentUser.Balance = Math.max(0, currentUser.Balance - amount);
+    if (!currentUser) {
+      return jsonResponse({ message: "Please sign in to withdraw at branch." }, 401);
     }
+    const activeUser = currentUser;
+    const amount = Number(bodyJson?.["amount"]);
+
+    if (!Number.isFinite(amount) || amount < 2000) {
+      return jsonResponse({ message: "Minimum branch withdrawal is UGX 2,000." }, 400);
+    }
+    if (activeUser.Balance < amount) {
+      return jsonResponse(
+        {
+          status: "REJECTED",
+          message: `Insufficient balance (${activeUser.Balance.toLocaleString()} UGX available).`,
+        },
+        417,
+      );
+    }
+
+    activeUser.Balance -= amount;
+    const code = `BR-${Math.floor(100000 + Math.random() * 900000)}`;
+    appendStatementRow(activeUser, "Withdrawal", -amount, `Branch Cashout Voucher (${code})`);
 
     return jsonResponse({
       code,
+      Code: code,
       amount,
+      balance: activeUser.Balance,
       status: "APPROVED",
       expiresIn: "48 hours",
       message: "Branch pickup voucher generated. Present code and ID to cashier.",
@@ -494,14 +816,33 @@ export async function handleApiProxy(request: Request): Promise<Response> {
     const totalBonus = Number(bodyJson?.["totalBonus"]) || 0;
     const betData = Array.isArray(bodyJson?.["betData"]) ? bodyJson["betData"] : [];
 
-    const activeUser = currentUser || serverUsers.get("demo_user")!;
-    if (activeUser && activeUser.Balance >= totalStake) {
-      activeUser.Balance -= totalStake;
+    if (!currentUser) {
+      return jsonResponse({ message: "Please sign in to place a bet." }, 401);
     }
+    const activeUser = currentUser;
+    if (!Number.isFinite(totalStake) || totalStake <= 0) {
+      return jsonResponse({ message: "Invalid bet stake amount." }, 400);
+    }
+    if (activeUser.Balance < totalStake) {
+      return jsonResponse(
+        {
+          message: `Insufficient balance (${activeUser.Balance.toLocaleString()} UGX available).`,
+        },
+        417,
+      );
+    }
+    activeUser.Balance -= totalStake;
 
     const receiptId = String(Math.floor(1000000 + Math.random() * 9000000));
     const bookingCode = `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
     const calculatedPayout = Math.round(totalStake * totalOdds) + totalBonus;
+
+    appendStatementRow(
+      activeUser,
+      "Bet Stake",
+      -totalStake,
+      `Bet Ticket #${bookingCode} (${betData.length} selections)`,
+    );
 
     const newTicket: ServerTicket = {
       ReceiptId: receiptId,
@@ -545,20 +886,35 @@ export async function handleApiProxy(request: Request): Promise<Response> {
 
   // ── Route: /api/Online/redeem ─────────────────────────────────────────────
   if (subpath === "/api/Online/redeem" && request.method === "POST") {
+    if (!currentUser) {
+      return jsonResponse({ message: "Please sign in to redeem a voucher." }, 401);
+    }
+    const activeUser = currentUser;
     const code = String(bodyJson?.["code"] || "")
       .trim()
       .toUpperCase();
-    if (!code) {
-      return jsonResponse({ error: "Please enter a valid voucher code." }, 400);
+    if (!code || code.length < 4) {
+      return jsonResponse({ message: "Please enter a valid voucher code." }, 400);
+    }
+    if (redeemedVoucherCodes.has(code)) {
+      return jsonResponse({ message: `Voucher ${code} has already been redeemed.` }, 417);
     }
 
-    const redeemAmount = code.includes("50") ? 50000 : code.includes("10") ? 10000 : 25000;
-    if (currentUser) {
-      currentUser.Balance += redeemAmount;
-    }
+    const redeemAmount = code.includes("100")
+      ? 100000
+      : code.includes("50")
+        ? 50000
+        : code.includes("10")
+          ? 10000
+          : 25000;
+
+    redeemedVoucherCodes.add(code);
+    activeUser.Balance += redeemAmount;
+    appendStatementRow(activeUser, "Deposit", redeemAmount, `Shop Deposit Voucher (${code})`);
 
     return jsonResponse({
-      balance: currentUser ? currentUser.Balance : 100000,
+      success: true,
+      balance: activeUser.Balance,
       amount: redeemAmount,
       code,
       message: `Voucher ${code} successfully redeemed. ${redeemAmount.toLocaleString()} UGX added to balance.`,
@@ -580,8 +936,12 @@ export async function handleApiProxy(request: Request): Promise<Response> {
 
   // ── Route: /api/Account/Bonuses ───────────────────────────────────────────
   if (subpath === "/api/Account/Bonuses" && request.method === "GET") {
+    if (!currentUser) {
+      return jsonResponse({ message: "Authentication required." }, 401);
+    }
+    const bonusTxs = getUserBonusTransactions(currentUser);
     return jsonResponse({
-      BonusBalance: currentUser?.BonusBalance || 15000,
+      BonusBalance: currentUser.BonusBalance,
       ActiveBonuses: [
         {
           Id: "BNS-WLCM",
@@ -598,38 +958,16 @@ export async function handleApiProxy(request: Request): Promise<Response> {
           ExpiresAt: "2026-11-30T23:59:59Z",
         },
       ],
+      Transactions: bonusTxs,
     });
   }
 
   // ── Route: /api/Statement/User ────────────────────────────────────────────
   if (subpath === "/api/Statement/User" && request.method === "GET") {
-    const activeBalance = currentUser ? currentUser.Balance : 125000;
-    return jsonResponse([
-      {
-        TransactionId: "ST-88129",
-        Date: new Date(Date.now() - 3600000).toISOString(),
-        Type: "Deposit",
-        Amount: 25000,
-        Balance: activeBalance,
-        Description: "MTN Mobile Money Deposit",
-      },
-      {
-        TransactionId: "ST-88114",
-        Date: new Date(Date.now() - 86400000).toISOString(),
-        Type: "Bet Stake",
-        Amount: -5000,
-        Balance: activeBalance - 25000,
-        Description: "Multi-Bet Ticket #SB9182",
-      },
-      {
-        TransactionId: "ST-88092",
-        Date: new Date(Date.now() - 172800000).toISOString(),
-        Type: "Payout",
-        Amount: 34500,
-        Balance: activeBalance - 20000,
-        Description: "Winnings credited: Ticket #SB8741",
-      },
-    ]);
+    if (!currentUser) {
+      return jsonResponse({ message: "Authentication required." }, 401);
+    }
+    return jsonResponse(getUserStatement(currentUser));
   }
 
   // ── Route: /api/Receipt/GetById/:id ───────────────────────────────────────

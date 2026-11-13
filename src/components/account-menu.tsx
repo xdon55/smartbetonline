@@ -29,7 +29,7 @@ import { ThemeToggle } from "./theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { useWallet } from "@/hooks/use-wallet";
 import { useOpenBets } from "@/hooks/use-open-bets";
-import { smartBetApi } from "@/lib/api-smartbet";
+import { toast } from "sonner";
 
 const guestLinks = [{ to: "/auth" as const, label: "Sign in / Register", icon: LogIn }];
 
@@ -44,33 +44,21 @@ const authLinks = [
 export function AccountMenu() {
   const [open, setOpen] = useState(false);
   const [bonusesOpen, setBonusesOpen] = useState(false);
-  const [bonusesData, setBonusesData] = useState<{
-    BonusBalance?: number;
-    ActiveBonuses?: Array<{
-      Id: string;
-      Name: string;
-      Amount: number;
-      Status: string;
-      ExpiresAt: string;
-    }>;
-  } | null>(null);
-  const [loadingBonuses, setLoadingBonuses] = useState(false);
 
   const { isAuthenticated, user, signOut, loading: authLoading } = useAuth();
-  const { balance, loading: walletLoading } = useWallet();
+  const {
+    balance,
+    bonusBalance,
+    bonuses,
+    accountId,
+    loading: walletLoading,
+    refresh,
+  } = useWallet();
   const { openCount } = useOpenBets();
 
-  const openBonuses = async () => {
+  const openBonuses = () => {
     setBonusesOpen(true);
-    setLoadingBonuses(true);
-    try {
-      const res = (await smartBetApi.getBonuses()) as typeof bonusesData;
-      setBonusesData(res);
-    } catch {
-      // fallback
-    } finally {
-      setLoadingBonuses(false);
-    }
+    void refresh();
   };
 
   useEffect(() => {
@@ -83,6 +71,9 @@ export function AccountMenu() {
   }, [open]);
 
   const links = isAuthenticated ? authLinks : guestLinks;
+  const effectiveBonusBalance = bonuses?.BonusBalance ?? bonusBalance;
+  const activeBonuses = bonuses?.ActiveBonuses ?? [];
+  const bonusTransactions = bonuses?.Transactions ?? [];
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -102,9 +93,19 @@ export function AccountMenu() {
         <div className="flex-1 overflow-y-auto">
           <div className="px-4 py-3">
             <div className="rounded-lg brand-gradient p-3 text-surface-foreground">
-              <p className="text-xs uppercase tracking-wide opacity-80">Balance</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-wide opacity-80">Balance</p>
+                {accountId && (
+                  <span className="rounded bg-black/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wide opacity-90">
+                    ID #{accountId}
+                  </span>
+                )}
+              </div>
               <p className="font-display text-2xl font-bold tabular-nums">
                 {authLoading || walletLoading ? "—" : formatUgx(balance ?? 0)}
+              </p>
+              <p className="mt-0.5 text-xs font-semibold tabular-nums opacity-90">
+                Bonus: {authLoading || walletLoading ? "—" : formatUgx(effectiveBonusBalance)}
               </p>
               {isAuthenticated && user?.email && (
                 <p className="mt-1 truncate text-xs opacity-80">{user.email}</p>
@@ -140,8 +141,8 @@ export function AccountMenu() {
                 <Gift className="h-4 w-4 text-accent" />
                 Bonuses & Rewards
               </div>
-              <span className="rounded-full bg-accent/20 px-2 py-0.5 text-xs font-bold text-accent">
-                Active
+              <span className="rounded-full bg-accent/20 px-2 py-0.5 text-xs font-bold tabular-nums text-accent">
+                {effectiveBonusBalance > 0 ? formatUgx(effectiveBonusBalance) : "Active"}
               </span>
             </button>
 
@@ -158,13 +159,9 @@ export function AccountMenu() {
                 variant="ghost"
                 onClick={async () => {
                   setOpen(false);
-                  try {
-                    await smartBetApi.logOff();
-                  } catch {
-                    // Ignore offline
-                  }
-                  localStorage.removeItem("smartbet_active_user");
-                  signOut();
+                  await signOut();
+                  await refresh();
+                  toast.success("Signed out");
                 }}
                 className="flex w-full items-center justify-start gap-3 rounded-md px-3 py-2.5 text-sm font-semibold hover:bg-muted"
               >
@@ -182,13 +179,13 @@ export function AccountMenu() {
       </SheetContent>
 
       <Dialog open={bonusesOpen} onOpenChange={setBonusesOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="font-display uppercase tracking-wide">
               Bonuses & Promotions
             </DialogTitle>
           </DialogHeader>
-          {loadingBonuses ? (
+          {walletLoading && !bonuses ? (
             <p className="py-6 text-center text-sm text-muted-foreground">Loading bonuses...</p>
           ) : (
             <div className="space-y-4">
@@ -197,7 +194,7 @@ export function AccountMenu() {
                   Available Bonus Balance
                 </p>
                 <p className="font-display text-2xl font-bold tabular-nums">
-                  {formatUgx(bonusesData?.BonusBalance || 15000)}
+                  {formatUgx(effectiveBonusBalance)}
                 </p>
               </div>
 
@@ -205,39 +202,64 @@ export function AccountMenu() {
                 <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
                   Active Promotions
                 </p>
-                {(
-                  bonusesData?.ActiveBonuses || [
-                    {
-                      Id: "BNS-WLCM",
-                      Name: "100% Sports Welcome Bonus",
-                      Amount: 10000,
-                      Status: "Active",
-                      ExpiresAt: "2026-12-31",
-                    },
-                    {
-                      Id: "BNS-ACC",
-                      Name: "Weekly Multi-Bet Accumulator Boost",
-                      Amount: 5000,
-                      Status: "Active",
-                      ExpiresAt: "2026-11-30",
-                    },
-                  ]
-                ).map((b) => (
-                  <div
-                    key={b.Id}
-                    className="flex items-center justify-between rounded-lg border border-border bg-card p-3"
-                  >
-                    <div>
-                      <p className="text-sm font-bold">{b.Name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        Status: <span className="font-semibold text-emerald-400">{b.Status}</span>
-                      </p>
+                {activeBonuses.length === 0 ? (
+                  <p className="rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground">
+                    No active bonus promotions right now. Enter a promo code on deposit to claim.
+                  </p>
+                ) : (
+                  activeBonuses.map((b) => (
+                    <div
+                      key={b.Id}
+                      className="flex items-center justify-between rounded-lg border border-border bg-card p-3"
+                    >
+                      <div>
+                        <p className="text-sm font-bold">{b.Name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Status: <span className="font-semibold text-emerald-400">{b.Status}</span>
+                          {b.ExpiresAt ? ` · Exp ${b.ExpiresAt}` : ""}
+                        </p>
+                      </div>
+                      <span className="font-bold tabular-nums text-accent">
+                        {formatUgx(b.Amount)}
+                      </span>
                     </div>
-                    <span className="font-bold tabular-nums text-accent">
-                      {formatUgx(b.Amount)}
-                    </span>
+                  ))
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                  Bonus Transactions
+                </p>
+                {bonusTransactions.length === 0 ? (
+                  <p className="rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground">
+                    No bonus transactions recorded yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {bonusTransactions.map((tx) => (
+                      <div
+                        key={tx.Id}
+                        className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-xs"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="truncate font-semibold text-foreground">{tx.Description}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {tx.Type} · {new Date(tx.Date).toLocaleString()}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 font-bold tabular-nums ${
+                            tx.Amount >= 0 ? "text-emerald-400" : "text-rose-400"
+                          }`}
+                        >
+                          {tx.Amount >= 0 ? "+" : ""}
+                          {formatUgx(tx.Amount)}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             </div>
           )}
