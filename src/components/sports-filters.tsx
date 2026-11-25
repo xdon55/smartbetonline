@@ -13,7 +13,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { kickoffOptions, marketOptions, matches, sports } from "@/lib/betting-data";
+import {
+  filterLiveMarkets,
+  kickoffOptions,
+  marketOptions,
+  matches,
+  sports,
+} from "@/lib/betting-data";
 
 export type SportsFilterState = {
   sport: string;
@@ -141,11 +147,11 @@ export function filterMatches(all: typeof matches, f: SportsFilterState) {
     if (f.kickoff !== "all" && m.day !== f.kickoff) {
       return false;
     }
-    if (
-      f.market !== "all" &&
-      (!Array.isArray(m.markets) || !m.markets.some((mk) => mk.id === f.market))
-    ) {
-      return false;
+    if (f.market !== "all") {
+      const availableMarkets = filterLiveMarkets(m);
+      if (!availableMarkets.some((mk) => mk.id === f.market)) {
+        return false;
+      }
     }
     return true;
   });

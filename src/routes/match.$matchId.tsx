@@ -3,17 +3,19 @@
  * Header banner with fixture info plus the full market list from
  * real SmartBet feeds. Every outcome button toggles a bet slip selection.
  */
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft, Loader2, Star } from "lucide-react";
 import {
   matches as fallbackMatches,
   detailMarkets,
   flagFor,
+  formatLiveClock,
   type Match,
   type Market,
   type Outcome,
 } from "@/lib/betting-data";
 import { useBetSlip } from "@/lib/betslip";
+import { useFavorites } from "@/lib/favorites";
 import { BetSlip } from "@/components/bet-slip";
 import { usePrematchGames, getCachedMatchById } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
@@ -117,6 +119,8 @@ function MatchDetail() {
   const { matchId } = Route.useParams();
   const navigate = useNavigate();
   const { toggle, has } = useBetSlip();
+  const { isMatchFavorited, isLeagueFavorited, toggleFavoriteMatch, toggleFavoriteLeague } =
+    useFavorites();
 
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
@@ -129,10 +133,10 @@ function MatchDetail() {
   const { matches: prematchMatches, loading: loadingPrematch } = usePrematchGames();
   const { matches: liveMatches, loading: loadingLive } = useLiveGames();
 
-  // Find match in prematch feed, live feed, or local fallback
+  // Find match in live feed first (so live scores/clock take priority), then prematch or local fallback
   const match: Match | undefined =
-    prematchMatches.find((m) => m.id === matchId) ||
     liveMatches.find((m) => m.id === matchId) ||
+    prematchMatches.find((m) => m.id === matchId) ||
     fallbackMatches.find((m) => m.id === matchId);
 
   const isLoading = (loadingPrematch || loadingLive) && !match;
@@ -177,31 +181,39 @@ function MatchDetail() {
     );
   };
 
-  const isHalfTimeMarket = (m: Market) => {
-    const nameLower = m.name.toLowerCase();
-    const idLower = m.id.toLowerCase();
+  const isSecondHalfMarket = (m: Market) => {
+    const combined = `${m.id.toLowerCase()} ${m.name.toLowerCase()}`;
     return (
-      nameLower.includes("half") ||
-      nameLower.includes("1st") ||
-      nameLower.includes("2nd") ||
-      nameLower.includes("ht") ||
-      idLower.includes("h1") ||
-      idLower.includes("h2") ||
-      idLower.includes("ht")
+      /\b(2nd\s*half|second\s*half|2h|h2)\b/.test(combined) ||
+      /(?:^|[_-])h2(?:$|[_-])/.test(m.id.toLowerCase())
+    );
+  };
+
+  const isHalfTimeMarket = (m: Market) => {
+    if (isSecondHalfMarket(m)) return false;
+    const combined = `${m.id.toLowerCase()} ${m.name.toLowerCase()}`;
+    return (
+      /\b(1st\s*half|first\s*half|half\s*time|halftime|h1|1h|ht)\b/.test(combined) ||
+      /(?:^|[_-])(h1|1h|ht)(?:$|[_-])/.test(m.id.toLowerCase())
     );
   };
 
   // Group total goals markets
   const ftTotalGoalsMarkets = rawMarkets.filter(
-    (m) => isTotalGoalsMarket(m) && !isHalfTimeMarket(m),
+    (m) => isTotalGoalsMarket(m) && !isHalfTimeMarket(m) && !isSecondHalfMarket(m),
   );
 
   const htTotalGoalsMarkets = rawMarkets.filter(
     (m) => isTotalGoalsMarket(m) && isHalfTimeMarket(m),
   );
 
+  const h2TotalGoalsMarkets = rawMarkets.filter(
+    (m) => isTotalGoalsMarket(m) && isSecondHalfMarket(m),
+  );
+
   const ftGoalLines = buildGoalLineGroups(ftTotalGoalsMarkets);
   const htGoalLines = buildGoalLineGroups(htTotalGoalsMarkets);
+  const h2GoalLines = buildGoalLineGroups(h2TotalGoalsMarkets);
 
   // Classify standard markets into requested fixed slots
   const nonTotalGoalsMarkets = rawMarkets.filter((m) => !isTotalGoalsMarket(m));
@@ -220,14 +232,15 @@ function MatchDetail() {
     const nameLower = m.name.toLowerCase();
     const idLower = m.id.toLowerCase();
     const isHT = isHalfTimeMarket(m);
+    const isH2 = isSecondHalfMarket(m);
 
-    if (!market1X2_FT && (idLower === "1x2" || (nameLower === "1x2" && !isHT))) {
+    if (!market1X2_FT && (idLower === "1x2" || (nameLower === "1x2" && !isHT && !isH2))) {
       market1X2_FT = m;
     } else if (!market1X2_HT && (idLower === "1x2_h1" || (nameLower.includes("1x2") && isHT))) {
       market1X2_HT = m;
     } else if (
       !marketDC_FT &&
-      (idLower === "dc" || (nameLower.includes("double chance") && !isHT))
+      (idLower === "dc" || (nameLower.includes("double chance") && !isHT && !isH2))
     ) {
       marketDC_FT = m;
     } else if (
@@ -237,7 +250,10 @@ function MatchDetail() {
       marketDC_HT = m;
     } else if (!marketDNB && (idLower === "dnb" || nameLower.includes("draw no bet"))) {
       marketDNB = m;
-    } else if (!marketBTTS && (idLower === "btts" || nameLower.includes("both teams to score"))) {
+    } else if (
+      !marketBTTS &&
+      (idLower === "btts" || (nameLower === "both teams to score" && !isHT && !isH2))
+    ) {
       marketBTTS = m;
     } else if (
       !marketHandicap &&
@@ -318,6 +334,14 @@ function MatchDetail() {
       lines: htGoalLines,
     });
   }
+  if (h2GoalLines.length > 0) {
+    sections.push({
+      key: "h2_total_goals",
+      title: "2nd Half total goals",
+      type: "goals_table",
+      lines: h2GoalLines,
+    });
+  }
   if (marketBTTS) {
     sections.push({
       key: marketBTTS.id,
@@ -377,6 +401,7 @@ function MatchDetail() {
             pick: o.label,
             odds: o.odds,
             betCategory: o.betCategory,
+            line: o.line,
             matchOddId: o.matchOddId,
             bookMakerId: o.bookMakerId,
             isLive: Boolean(match.live),
@@ -427,13 +452,68 @@ function MatchDetail() {
     <main className="relative mx-auto flex w-full max-w-[968px] gap-2 px-0 py-3 md:grid md:h-[calc(100vh-7.5rem)] md:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] md:overflow-hidden md:px-3">
       <div className="no-scrollbar min-w-0 flex-1 space-y-3 md:h-full md:overflow-y-auto md:py-3">
         <section className="brand-gradient px-3 py-4 text-surface-foreground md:rounded-lg">
-          <button
-            type="button"
-            onClick={handleBack}
-            className="mb-3 inline-flex items-center gap-1 text-xs font-semibold opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back
-          </button>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleBack}
+              className="inline-flex items-center gap-1 text-xs font-semibold opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Back
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  toggleFavoriteLeague({
+                    league: match.league,
+                    country: match.country,
+                    sport: match.sport,
+                  })
+                }
+                aria-pressed={isLeagueFavorited(match.league, match.country)}
+                aria-label={
+                  isLeagueFavorited(match.league, match.country)
+                    ? `Unpin ${match.league}`
+                    : `Pin ${match.league} to favorites`
+                }
+                className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] font-semibold transition-colors ${
+                  isLeagueFavorited(match.league, match.country)
+                    ? "border-accent bg-accent/20 text-accent"
+                    : "border-surface-foreground/20 bg-surface-foreground/10 text-surface-foreground/90 hover:border-surface-foreground/40"
+                }`}
+              >
+                <Star
+                  className={`h-3 w-3 ${
+                    isLeagueFavorited(match.league, match.country) ? "fill-current" : ""
+                  }`}
+                />
+                <span>
+                  {isLeagueFavorited(match.league, match.country) ? "League pinned" : "Pin league"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => toggleFavoriteMatch(match)}
+                aria-pressed={isMatchFavorited(match.id)}
+                aria-label={
+                  isMatchFavorited(match.id)
+                    ? `Unpin ${match.home} v ${match.away}`
+                    : `Pin ${match.home} v ${match.away} to favorites`
+                }
+                className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] font-semibold transition-colors ${
+                  isMatchFavorited(match.id)
+                    ? "border-accent bg-accent text-accent-foreground"
+                    : "border-surface-foreground/20 bg-surface-foreground/10 text-surface-foreground/90 hover:border-surface-foreground/40"
+                }`}
+              >
+                <Star className={`h-3 w-3 ${isMatchFavorited(match.id) ? "fill-current" : ""}`} />
+                <span>{isMatchFavorited(match.id) ? "Pinned" : "Pin match"}</span>
+              </button>
+            </div>
+          </div>
+
           <p className="text-[11px] font-semibold uppercase tracking-wide opacity-80">
             {flagFor(match.country)} {match.country} · {match.league}
           </p>
@@ -442,8 +522,8 @@ function MatchDetail() {
           </h1>
           <p className="mt-1 text-xs opacity-80">
             {match.live ? (
-              <span className="font-bold">
-                Live {match.live.minute}&apos; · {match.live.homeScore}-{match.live.awayScore}
+              <span className="font-bold tabular-nums">
+                Live {formatLiveClock(match.live)} · {match.live.homeScore}-{match.live.awayScore}
               </span>
             ) : (
               match.startsAt
@@ -451,34 +531,40 @@ function MatchDetail() {
           </p>
         </section>
 
-        <Accordion type="multiple" defaultValue={defaultOpenMarkets} className="space-y-3">
-          {sections.map((section) => (
-            <AccordionItem
-              key={section.key}
-              value={section.key}
-              className="overflow-hidden rounded-lg border border-border bg-card"
-            >
-              <AccordionTrigger className="bg-secondary px-3 py-2 text-xs font-bold uppercase tracking-wide text-secondary-foreground hover:no-underline">
-                <span>{section.title}</span>
-              </AccordionTrigger>
-              <AccordionContent className="p-3">
-                {section.type === "goals_table" ? (
-                  renderGoalLineTable(section.lines)
-                ) : (
-                  <div
-                    className={`grid gap-2 ${
-                      section.market.outcomes.length === 2 ? "grid-cols-2" : "grid-cols-3"
-                    }`}
-                  >
-                    {section.market.outcomes.map((o) =>
-                      renderOutcomeBtn(o, section.market.id, section.market.name),
-                    )}
-                  </div>
-                )}
-              </AccordionContent>
-            </AccordionItem>
-          ))}
-        </Accordion>
+        {sections.length === 0 ? (
+          <div className="rounded-lg border border-border bg-card p-6 text-center text-xs font-semibold text-muted-foreground">
+            No live markets are currently open for this match.
+          </div>
+        ) : (
+          <Accordion type="multiple" defaultValue={defaultOpenMarkets} className="space-y-3">
+            {sections.map((section) => (
+              <AccordionItem
+                key={section.key}
+                value={section.key}
+                className="overflow-hidden rounded-lg border border-border bg-card"
+              >
+                <AccordionTrigger className="bg-secondary px-3 py-2 text-xs font-bold uppercase tracking-wide text-secondary-foreground hover:no-underline">
+                  <span>{section.title}</span>
+                </AccordionTrigger>
+                <AccordionContent className="p-3">
+                  {section.type === "goals_table" ? (
+                    renderGoalLineTable(section.lines)
+                  ) : (
+                    <div
+                      className={`grid gap-2 ${
+                        section.market.outcomes.length === 2 ? "grid-cols-2" : "grid-cols-3"
+                      }`}
+                    >
+                      {section.market.outcomes.map((o) =>
+                        renderOutcomeBtn(o, section.market.id, section.market.name),
+                      )}
+                    </div>
+                  )}
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        )}
       </div>
 
       <BetSlip />

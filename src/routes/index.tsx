@@ -15,6 +15,7 @@ import {
   Layers,
   Radio,
   Sparkles,
+  Star,
   Volleyball,
   Trophy,
   Users,
@@ -24,6 +25,8 @@ import { flagFor, formatUgx, matches } from "@/lib/betting-data";
 import { MatchCard } from "@/components/match-card";
 import { BetSlip } from "@/components/bet-slip";
 import { useBetSlip } from "@/lib/betslip";
+import { useAuth } from "@/hooks/use-auth";
+import { useFavorites } from "@/lib/favorites";
 import { usePrematchGames } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
 
@@ -185,7 +188,7 @@ function SectionHead({
 }: {
   title: string;
   icon: typeof Flame;
-  to?: "/sports" | "/live" | "/casino" | "/aviator" | "/crash";
+  to?: "/sports" | "/live" | "/casino" | "/aviator" | "/crash" | "/favorites";
 }) {
   return (
     <div className="flex items-center justify-between px-3 md:px-0">
@@ -233,11 +236,82 @@ function SportsGamesSection({ feedMatches }: { feedMatches: typeof matches }) {
   );
 }
 
+function MyFavoritesSection({
+  feedMatches,
+  liveMatches,
+}: {
+  feedMatches: typeof matches;
+  liveMatches: typeof matches;
+}) {
+  const { isAuthenticated } = useAuth();
+  const { favoriteMatches, favoriteLeagues, totalCount } = useFavorites();
+
+  if (!isAuthenticated || favoriteMatches.length === 0) return null;
+
+  // Resolve pinned matches prioritizing live feed first
+  const activeMap = new Map<string, (typeof matches)[number]>();
+  for (const m of feedMatches.length ? feedMatches : matches) {
+    activeMap.set(m.id, m);
+  }
+  for (const m of liveMatches) {
+    activeMap.set(m.id, m);
+  }
+
+  const resolvedMatches = favoriteMatches
+    .map((f) => activeMap.get(f.matchId))
+    .filter((m): m is (typeof matches)[number] => Boolean(m))
+    .sort((a, b) => Number(Boolean(b.live)) - Number(Boolean(a.live)));
+
+  if (resolvedMatches.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      <SectionHead title="My Favorites" icon={Star} to="/favorites" />
+
+      <div className="space-y-2.5">
+        {favoriteLeagues.length > 0 && (
+          <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 md:px-0">
+            {favoriteLeagues.map((l) => (
+              <Link
+                key={l.key}
+                to="/sports"
+                search={{ league: l.league }}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-accent/40 bg-card px-3 py-1.5 text-xs font-semibold text-card-foreground transition-colors hover:border-accent hover:bg-muted/60"
+              >
+                <Star className="h-3 w-3 fill-accent text-accent" />
+                <span className="text-sm leading-none">{flagFor(l.country)}</span>
+                <span>{l.league}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+
+        <section className="overflow-hidden bg-card md:rounded-md md:border md:border-border md:shadow-[var(--shadow-card)]">
+          {resolvedMatches.slice(0, 4).map((m) => (
+            <MatchCard key={m.id} match={m} />
+          ))}
+          <div className="flex justify-center border-t border-border/60 bg-muted/20 p-2.5">
+            <Link
+              to="/favorites"
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-accent transition-colors hover:text-accent/80 hover:underline"
+            >
+              <span>Open My Favorites</span>
+              <span className="font-mono">({totalCount})</span>
+            </Link>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function HomePage() {
   const { matches: feedMatches } = usePrematchGames();
   const { matches: liveMatches } = useLiveGames();
   const combos = useCombos(feedMatches);
   const { toggle, has } = useBetSlip();
+  const { isLeagueFavorited, toggleFavoriteLeague, isMatchFavorited, toggleFavoriteMatch } =
+    useFavorites();
   const featured = (feedMatches.length ? feedMatches : matches)
     .filter((m) => m.popular)
     .slice(0, 4);
@@ -250,18 +324,45 @@ function HomePage() {
         <div className="space-y-3">
           <SectionHead title="Top leagues" icon={Trophy} to="/sports" />
           <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 md:px-0">
-            {topLeagues.map((l) => (
-              <Link
-                key={l.name}
-                to="/sports"
-                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-border bg-card px-3.5 py-1.5 text-xs font-semibold text-card-foreground transition-all hover:border-accent/60 hover:bg-muted/60"
-              >
-                <span className="text-sm leading-none">{flagFor(l.country)}</span>
-                <span>{l.name}</span>
-              </Link>
-            ))}
+            {topLeagues.map((l) => {
+              const pinned = isLeagueFavorited(l.name, l.country);
+              return (
+                <div
+                  key={`${l.country}-${l.name}`}
+                  className="inline-flex shrink-0 items-center rounded-full border border-border bg-card text-xs font-semibold text-card-foreground transition-all hover:border-accent/60 hover:bg-muted/60"
+                >
+                  <Link
+                    to="/sports"
+                    search={{ league: l.name }}
+                    className="inline-flex items-center gap-2 py-1.5 pl-3.5 pr-1.5"
+                  >
+                    <span className="text-sm leading-none">{flagFor(l.country)}</span>
+                    <span>{l.name}</span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      toggleFavoriteLeague({
+                        league: l.name,
+                        country: l.country,
+                        sport: "Football",
+                      })
+                    }
+                    aria-label={pinned ? `Unpin ${l.name}` : `Pin ${l.name} to favorites`}
+                    aria-pressed={pinned}
+                    className={`inline-flex h-7 w-7 items-center justify-center rounded-full pr-1 transition-colors ${
+                      pinned ? "text-accent" : "text-muted-foreground/60 hover:text-foreground"
+                    }`}
+                  >
+                    <Star className={`h-3 w-3 ${pinned ? "fill-current" : ""}`} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
+
+        <MyFavoritesSection feedMatches={feedMatches} liveMatches={liveMatches} />
 
         {liveNow.length > 0 && (
           <div className="space-y-3">
@@ -289,6 +390,7 @@ function HomePage() {
             {featured.map((m) => {
               const market = m.markets.find((k) => k.id === "1x2") ?? m.markets[0]!;
               const labels = ["W1", "X", "W2"];
+              const pinned = isMatchFavorited(m.id);
               return (
                 <div
                   key={m.id}
@@ -298,17 +400,36 @@ function HomePage() {
                       "linear-gradient(150deg, color-mix(in oklab, var(--color-card) 92%, #0b2740) 0%, var(--color-card) 55%, color-mix(in oklab, var(--color-card) 88%, #0b2740) 100%)",
                   }}
                 >
-                  <Link
-                    to="/match/$matchId"
-                    params={{ matchId: m.id }}
-                    className="flex items-center gap-2 border-b border-border/70 pb-2.5"
-                  >
-                    <span className="text-base leading-none">⚽</span>
-                    <span className="text-sm leading-none">{flagFor(m.country)}</span>
-                    <span className="truncate text-xs font-semibold text-muted-foreground">
-                      {m.league}
-                    </span>
-                  </Link>
+                  <div className="flex items-center justify-between gap-2 border-b border-border/70 pb-2.5">
+                    <Link
+                      to="/match/$matchId"
+                      params={{ matchId: m.id }}
+                      className="flex min-w-0 flex-1 items-center gap-2"
+                    >
+                      <span className="text-base leading-none">⚽</span>
+                      <span className="text-sm leading-none">{flagFor(m.country)}</span>
+                      <span className="truncate text-xs font-semibold text-muted-foreground">
+                        {m.league}
+                      </span>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => toggleFavoriteMatch(m)}
+                      aria-label={
+                        pinned
+                          ? `Unpin ${m.home} v ${m.away}`
+                          : `Pin ${m.home} v ${m.away} to favorites`
+                      }
+                      aria-pressed={pinned}
+                      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
+                        pinned
+                          ? "text-accent"
+                          : "text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+                      }`}
+                    >
+                      <Star className={`h-3.5 w-3.5 ${pinned ? "fill-current" : ""}`} />
+                    </button>
+                  </div>
 
                   <div className="grid grid-cols-3 items-center gap-2 py-3.5">
                     <p className="truncate text-center text-xs font-bold text-card-foreground">

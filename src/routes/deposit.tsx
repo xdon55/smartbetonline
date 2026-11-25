@@ -1,10 +1,11 @@
 /**
  * routes/deposit.tsx — DEPOSIT page.
  *
- * Integrates directly with:
- * - SmartBet Mobile Money Deposit API (POST /api/Online/MobileMoneyDepositRequest)
+ * Implements:
+ * - Mobile Money Deposit (POST /api/Online/MobileMoneyDepositRequest)
  * - Real-time USSD Payment Status Polling (GET /api/Online/DepositStatus/{code})
- * - Resilient ledger synchronization with Supabase transactions and wallets
+ * - Shop Deposit Voucher Redemption (POST /api/Online/redeem)
+ * - Optional Supabase ledger synchronization when configured
  */
 import { useEffect, useState } from "react";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
@@ -17,6 +18,8 @@ import {
   RotateCw,
   ArrowRight,
   ShieldCheck,
+  Ticket,
+  Lock,
   X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -26,7 +29,7 @@ import { formatUgx } from "@/lib/betting-data";
 import { useWallet } from "@/hooks/use-wallet";
 import { useAuth } from "@/hooks/use-auth";
 import { internalDeposit } from "@/modules/wallet/wallet.functions";
-import { ApiError, smartBetApi } from "@/lib/api-smartbet";
+import { ApiError, formatSmartBetPhone, smartBetApi } from "@/lib/api-smartbet";
 import { recordWalletTransaction } from "@/lib/supabase-sportsbook";
 import { usePaymentPoller } from "@/hooks/use-payment-poller";
 
@@ -48,6 +51,11 @@ export const Route = createFileRoute("/deposit")({
   }),
   component: DepositPage,
 });
+
+const isSupabaseConfigured =
+  typeof import.meta !== "undefined" &&
+  Boolean(import.meta.env?.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY);
 
 const methods = [
   {
@@ -77,16 +85,25 @@ const quickAmounts = [2000, 5000, 10000, 20000, 50000, 100000];
 
 function DepositPage() {
   const router = useRouter();
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, loading: authLoading } = useAuth();
   const { balance, bonusBalance, phoneNumber, loading, refresh, syncBalance } = useWallet();
+
   const [method, setMethod] = useState("mtn");
   const [phone, setPhone] = useState("0772000000");
   const [phoneEdited, setPhoneEdited] = useState(false);
   const [promoCode, setPromoCode] = useState("");
   const [amount, setAmount] = useState(10000);
   const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Shop deposit voucher state
   const [voucherCode, setVoucherCode] = useState("");
   const [redeemingVoucher, setRedeemingVoucher] = useState(false);
+  const [voucherResult, setVoucherResult] = useState<{
+    code: string;
+    amount: number;
+    newBalance: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!phoneEdited && phoneNumber) {
@@ -95,19 +112,46 @@ function DepositPage() {
   }, [phoneEdited, phoneNumber]);
 
   // Poller hook for real-time USSD tracking
-  const poller = usePaymentPoller((creditedAmount, newBal) => {
+  const poller = usePaymentPoller(async (creditedAmount, newBal) => {
     if (typeof newBal === "number") {
       syncBalance(newBal);
     }
-    void refresh();
+    if (isSupabaseConfigured && isAuthenticated && user?.id) {
+      try {
+        await (
+          internalDeposit as unknown as (args: {
+            data: { amount: number; reference?: string };
+          }) => Promise<{ transactionId: string }>
+        )({
+          data: {
+            amount: creditedAmount,
+            reference: `${method.toUpperCase()}:${poller.code || "DEPOSIT"}`,
+          },
+        });
+      } catch {
+        // Non-fatal optional Supabase sync
+      }
+    }
+    await refresh();
     toast.success(`Deposit confirmed! ${formatUgx(creditedAmount)} credited to your wallet.`);
   });
 
   async function onRedeemVoucher(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setErrorMessage(null);
+
+    if (!isAuthenticated) {
+      const msg = "Please sign in to redeem a shop deposit code.";
+      setErrorMessage(msg);
+      toast.error(msg);
+      return;
+    }
+
     const cleanCode = voucherCode.trim().toUpperCase();
-    if (!cleanCode) {
-      toast.error("Please enter a deposit voucher code");
+    if (!cleanCode || cleanCode.length < 4) {
+      const msg = "Please enter a valid deposit voucher code (at least 4 characters).";
+      setErrorMessage(msg);
+      toast.error(msg);
       return;
     }
 
@@ -115,14 +159,17 @@ function DepositPage() {
     try {
       const res = await smartBetApi.redeemDeposit(cleanCode);
       const credited = res?.amount || 25000;
-      const updatedBal = typeof res?.balance === "number" ? res.balance : res?.Balance;
-      if (typeof updatedBal === "number") {
-        syncBalance(updatedBal);
-      }
-      void refresh();
+      const updatedBal =
+        typeof res?.balance === "number"
+          ? res.balance
+          : typeof res?.Balance === "number"
+            ? res.Balance
+            : (balance ?? 0) + credited;
 
-      // Mirror into Supabase when authenticated
-      if (isAuthenticated && user?.id) {
+      syncBalance(updatedBal);
+      await refresh();
+
+      if (isSupabaseConfigured && user?.id) {
         try {
           await recordWalletTransaction({
             userId: user.id,
@@ -137,13 +184,20 @@ function DepositPage() {
         }
       }
 
+      setVoucherResult({
+        code: res?.code || cleanCode,
+        amount: credited,
+        newBalance: updatedBal,
+      });
+      setVoucherCode("");
       toast.success(
         res?.message ||
           `Voucher redeemed successfully! ${formatUgx(credited)} added to your wallet.`,
       );
-      setVoucherCode("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Voucher redemption failed");
+      const msg = err instanceof Error ? err.message : "Voucher redemption failed";
+      setErrorMessage(msg);
+      toast.error(msg);
     } finally {
       setRedeemingVoucher(false);
     }
@@ -151,38 +205,40 @@ function DepositPage() {
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (amount < 1000) {
-      toast.error("Minimum deposit is UGX 1,000");
+    setErrorMessage(null);
+
+    if (!isAuthenticated) {
+      const msg = "Please sign in to deposit funds.";
+      setErrorMessage(msg);
+      toast.error(msg);
       return;
     }
-    if (phone.replace(/\D/g, "").length < 9) {
-      toast.error("Please enter a valid mobile money phone number");
+    if (amount < 1000) {
+      const msg = "Minimum deposit is UGX 1,000.";
+      setErrorMessage(msg);
+      toast.error(msg);
+      return;
+    }
+
+    const formattedPhone = formatSmartBetPhone(phone);
+    if (formattedPhone.length < 11) {
+      const msg = "Please enter a valid mobile money phone number (e.g. 0772 000 000).";
+      setErrorMessage(msg);
+      toast.error(msg);
       return;
     }
 
     setSubmitting(true);
-
     try {
-      // 1. Request deposit via SmartBet Mobile Money API (POST /api/Online/MobileMoneyDepositRequest)
-      const res = await smartBetApi.requestMobileMoneyDeposit(amount, phone, promoCode || null);
+      const res = await smartBetApi.requestMobileMoneyDeposit(
+        amount,
+        formattedPhone,
+        promoCode.trim() ? promoCode.trim().toUpperCase() : null,
+      );
       const code =
         res.code || res.transactionCode || `DEP-${Date.now().toString(36).toUpperCase()}`;
 
-      // 2. Mirror into internal PostgreSQL ledger via server function if signed in
-      if (isAuthenticated) {
-        try {
-          await (
-            internalDeposit as unknown as (args: {
-              data: { amount: number; reference?: string };
-            }) => Promise<{ transactionId: string }>
-          )({ data: { amount, reference: `${method.toUpperCase()}:${code}` } });
-        } catch {
-          // Safe if offline
-        }
-      }
-
-      // 3. Record pending transaction in Supabase
-      if (isAuthenticated && user?.id) {
+      if (isSupabaseConfigured && user?.id) {
         try {
           await recordWalletTransaction({
             userId: user.id,
@@ -190,21 +246,23 @@ function DepositPage() {
             direction: "credit",
             amount,
             reference: code,
-            metadata: { phone, method, promoCode, status: "pending" },
+            metadata: { phone: formattedPhone, method, promoCode, status: "pending" },
           });
         } catch (txErr) {
           console.warn("[Deposit] Supabase transaction record notice:", txErr);
         }
       }
 
-      // 4. Start real-time USSD polling (GET /api/Online/DepositStatus/{code})
-      poller.startPolling(code, amount, phone, method);
+      poller.startPolling(code, amount, formattedPhone, method);
     } catch (err) {
-      if (err instanceof ApiError && err.status && err.status >= 400 && err.status < 500) {
-        toast.error(err.message);
-      } else {
-        toast.error(err instanceof Error ? err.message : "Deposit request failed");
-      }
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Deposit request failed";
+      setErrorMessage(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -218,10 +276,14 @@ function DepositPage() {
           <p className="text-xs text-muted-foreground">
             Current balance:{" "}
             <span className="font-bold text-foreground">
-              {loading ? "—" : formatUgx(balance ?? 0)}
+              {authLoading || loading
+                ? "—"
+                : isAuthenticated
+                  ? formatUgx(balance ?? 0)
+                  : "Sign in required"}
             </span>
-            {bonusBalance > 0 && (
-              <span className="ml-2 text-accent font-semibold">
+            {isAuthenticated && bonusBalance > 0 && (
+              <span className="ml-2 font-semibold text-accent">
                 · Bonus {formatUgx(bonusBalance)}
               </span>
             )}
@@ -229,21 +291,44 @@ function DepositPage() {
         </div>
         <Link
           to="/transactions"
-          className="text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+          className="text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
         >
           History
         </Link>
       </div>
 
-      {/* ─────────────────────────────────────────────────────────────────────────────
-          STATE 1: WAITING FOR USSD PIN APPROVAL ON PHONE (POLLING)
-          ───────────────────────────────────────────────────────────────────────────── */}
-      {poller.isWaitingApproval ? (
+      {!authLoading && !isAuthenticated ? (
+        <section className="space-y-3 rounded-xl border border-border bg-card p-5 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-accent/15 text-accent">
+            <Lock className="h-6 w-6" aria-hidden="true" />
+          </div>
+          <h2 className="font-display text-base font-bold uppercase">Sign In to Deposit</h2>
+          <p className="text-xs text-muted-foreground">
+            You must be signed in to your SMARTBET account before initiating Mobile Money or Shop
+            deposits.
+          </p>
+          <Button asChild className="w-full bg-accent text-accent-foreground hover:opacity-90">
+            <Link to="/auth">Sign in / Register</Link>
+          </Button>
+        </section>
+      ) : null}
+
+      {errorMessage ? (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-xs font-medium text-destructive"
+        >
+          {errorMessage}
+        </div>
+      ) : null}
+
+      {/* STATE 1: WAITING FOR USSD PIN APPROVAL ON PHONE (POLLING) */}
+      {isAuthenticated && poller.isWaitingApproval ? (
         <section className="space-y-4 rounded-xl border border-border bg-card p-5 text-center shadow-lg">
-          {/* Animated telecom prompt pulse */}
           <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accent/15">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent/20 opacity-75" />
-            <Smartphone className="relative h-8 w-8 text-accent animate-bounce" />
+            <Smartphone className="relative h-8 w-8 animate-bounce text-accent" />
           </div>
 
           <div>
@@ -261,7 +346,7 @@ function DepositPage() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-border bg-secondary/50 p-3 text-left space-y-2">
+          <div className="space-y-2 rounded-lg border border-border bg-secondary/50 p-3 text-left">
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Amount</span>
               <span className="font-bold tabular-nums text-foreground">
@@ -274,7 +359,7 @@ function DepositPage() {
                 {poller.code}
                 <button
                   type="button"
-                  aria-label="Copy code"
+                  aria-label="Copy reference code"
                   onClick={() => {
                     if (poller.code) {
                       navigator.clipboard?.writeText(poller.code);
@@ -289,7 +374,6 @@ function DepositPage() {
             </div>
           </div>
 
-          {/* 90-second Countdown bar */}
           <div className="space-y-1.5">
             <div className="flex justify-between text-[11px] font-semibold text-muted-foreground">
               <span>Awaiting PIN confirmation</span>
@@ -303,12 +387,12 @@ function DepositPage() {
             </div>
           </div>
 
-          <div className="rounded-md bg-secondary/30 p-2.5 text-left text-[11px] text-muted-foreground space-y-1">
+          <div className="space-y-1 rounded-md bg-secondary/30 p-2.5 text-left text-[11px] text-muted-foreground">
             <div className="flex items-start gap-1.5">
               <ShieldCheck className="h-4 w-4 shrink-0 text-accent" />
               <span>
-                Enter your Mobile Money PIN on your phone to complete this deposit. The page will
-                automatically update immediately.
+                Enter your Mobile Money PIN on your phone to complete this deposit. Your balance
+                will update automatically as soon as confirmed.
               </span>
             </div>
           </div>
@@ -326,17 +410,17 @@ function DepositPage() {
             <Button
               type="button"
               size="sm"
+              disabled={poller.checking}
               onClick={poller.checkNow}
-              className="flex-1 text-xs bg-accent text-accent-foreground hover:opacity-90"
+              className="flex-1 bg-accent text-xs text-accent-foreground hover:opacity-90"
             >
-              <RotateCw className="mr-1 h-3.5 w-3.5" /> Check Now
+              <RotateCw className={`mr-1 h-3.5 w-3.5 ${poller.checking ? "animate-spin" : ""}`} />
+              {poller.checking ? "Checking..." : "Check Now"}
             </Button>
           </div>
         </section>
-      ) : poller.status === "success" ? (
-        /* ─────────────────────────────────────────────────────────────────────────────
-           STATE 2: DEPOSIT CONFIRMED & CREDITED
-           ───────────────────────────────────────────────────────────────────────────── */
+      ) : isAuthenticated && poller.status === "success" ? (
+        /* STATE 2: MOBILE MONEY DEPOSIT CONFIRMED & CREDITED */
         <section className="space-y-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-500">
             <CheckCircle2 className="h-8 w-8" />
@@ -350,7 +434,7 @@ function DepositPage() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-border bg-card p-3 space-y-1 text-xs">
+          <div className="space-y-1 rounded-lg border border-border bg-card p-3 text-xs">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Transaction Code</span>
               <span className="font-mono font-bold text-foreground">{poller.code}</span>
@@ -375,16 +459,60 @@ function DepositPage() {
             <Button
               type="button"
               onClick={() => router.navigate({ to: "/" })}
-              className="flex-1 text-xs bg-accent text-accent-foreground hover:opacity-90"
+              className="flex-1 bg-accent text-xs text-accent-foreground hover:opacity-90"
             >
               Place Bets <ArrowRight className="ml-1 h-3.5 w-3.5" />
             </Button>
           </div>
         </section>
-      ) : poller.status === "expired" || poller.status === "failed" ? (
-        /* ─────────────────────────────────────────────────────────────────────────────
-           STATE 3: TIMED OUT OR FAILED
-           ───────────────────────────────────────────────────────────────────────────── */
+      ) : isAuthenticated && voucherResult ? (
+        /* STATE 2B: SHOP DEPOSIT VOUCHER REDEEMED */
+        <section className="space-y-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-500">
+            <Ticket className="h-8 w-8" />
+          </div>
+
+          <div>
+            <h2 className="font-display text-xl font-bold text-foreground">
+              Shop Voucher Redeemed!
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              <strong className="text-foreground">{formatUgx(voucherResult.amount)}</strong> has
+              been credited to your wallet.
+            </p>
+          </div>
+
+          <div className="space-y-1 rounded-lg border border-border bg-card p-3 text-xs">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Voucher Code</span>
+              <span className="font-mono font-bold text-foreground">{voucherResult.code}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">New Balance</span>
+              <span className="font-bold text-accent">{formatUgx(voucherResult.newBalance)}</span>
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setVoucherResult(null)}
+              className="flex-1 text-xs"
+            >
+              Redeem Another
+            </Button>
+            <Button
+              type="button"
+              onClick={() => router.navigate({ to: "/" })}
+              className="flex-1 bg-accent text-xs text-accent-foreground hover:opacity-90"
+            >
+              Place Bets <ArrowRight className="ml-1 h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </section>
+      ) : isAuthenticated && (poller.status === "expired" || poller.status === "failed") ? (
+        /* STATE 3: TIMED OUT OR FAILED */
         <section className="space-y-4 rounded-xl border border-destructive/30 bg-destructive/10 p-5 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-destructive/20 text-destructive">
             <AlertCircle className="h-6 w-6" />
@@ -411,24 +539,27 @@ function DepositPage() {
             </Button>
             <Button
               type="button"
+              disabled={poller.checking}
               onClick={poller.checkNow}
-              className="flex-1 text-xs bg-accent text-accent-foreground hover:opacity-90"
+              className="flex-1 bg-accent text-xs text-accent-foreground hover:opacity-90"
             >
-              <RotateCw className="mr-1 h-3.5 w-3.5" /> Check Status
+              <RotateCw className={`mr-1 h-3.5 w-3.5 ${poller.checking ? "animate-spin" : ""}`} />
+              Check Status
             </Button>
           </div>
         </section>
-      ) : (
-        /* ─────────────────────────────────────────────────────────────────────────────
-           STATE 4: DEPOSIT INPUT FORM
-           ───────────────────────────────────────────────────────────────────────────── */
+      ) : isAuthenticated ? (
+        /* STATE 4: DEPOSIT INPUT FORM */
         <>
           <div className="space-y-2">
             {methods.map((m) => (
               <button
                 key={m.id}
                 type="button"
-                onClick={() => setMethod(m.id)}
+                onClick={() => {
+                  setErrorMessage(null);
+                  setMethod(m.id);
+                }}
                 className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left transition-colors ${
                   method === m.id
                     ? "border-accent bg-accent/10"
@@ -437,7 +568,7 @@ function DepositPage() {
               >
                 <div className="flex items-center gap-3">
                   <span
-                    className={`rounded px-2 py-0.5 text-[10px] tracking-wider uppercase ${m.badgeClass}`}
+                    className={`rounded px-2 py-0.5 text-[10px] uppercase tracking-wider ${m.badgeClass}`}
                   >
                     {m.badge}
                   </span>
@@ -461,26 +592,29 @@ function DepositPage() {
               onSubmit={onRedeemVoucher}
             >
               <div className="space-y-1.5">
-                <Label htmlFor="dep-voucher">Deposit code</Label>
+                <Label htmlFor="dep-voucher">Deposit voucher code</Label>
                 <Input
                   id="dep-voucher"
                   value={voucherCode}
-                  onChange={(e) => setVoucherCode(e.target.value.toUpperCase())}
-                  placeholder="e.g. VCH-8821-9921"
-                  className="font-mono uppercase text-sm tracking-wider"
+                  onChange={(e) => {
+                    setErrorMessage(null);
+                    setVoucherCode(e.target.value.toUpperCase());
+                  }}
+                  placeholder="e.g. VCH-50000 or SB-20K"
+                  className="font-mono text-sm uppercase tracking-wider"
                   required
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Enter the code from SMARTBET shop cashier
+                  Enter the deposit code printed on your SMARTBET retail shop receipt.
                 </p>
               </div>
 
               <Button
                 type="submit"
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
-                disabled={redeemingVoucher || !voucherCode.trim()}
+                className="w-full bg-emerald-600 font-bold text-white hover:bg-emerald-700"
+                disabled={redeemingVoucher || voucherCode.trim().length < 4}
               >
-                {redeemingVoucher ? "Verifying & Crediting..." : "Redeem code"}
+                {redeemingVoucher ? "Verifying & Crediting..." : "Redeem Shop Code"}
               </Button>
             </form>
           ) : (
@@ -495,6 +629,7 @@ function DepositPage() {
                   inputMode="tel"
                   value={phone}
                   onChange={(e) => {
+                    setErrorMessage(null);
                     setPhoneEdited(true);
                     setPhone(e.target.value);
                   }}
@@ -509,7 +644,10 @@ function DepositPage() {
                   id="dep-amount"
                   inputMode="numeric"
                   value={amount}
-                  onChange={(e) => setAmount(Number(e.target.value.replace(/\D/g, "")) || 0)}
+                  onChange={(e) => {
+                    setErrorMessage(null);
+                    setAmount(Number(e.target.value.replace(/\D/g, "")) || 0);
+                  }}
                 />
               </div>
 
@@ -518,7 +656,10 @@ function DepositPage() {
                   <button
                     key={q}
                     type="button"
-                    onClick={() => setAmount(q)}
+                    onClick={() => {
+                      setErrorMessage(null);
+                      setAmount(q);
+                    }}
                     className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${
                       amount === q
                         ? "bg-accent text-accent-foreground"
@@ -539,7 +680,7 @@ function DepositPage() {
                   value={promoCode}
                   onChange={(e) => setPromoCode(e.target.value)}
                   placeholder="Enter promo code"
-                  className="uppercase font-mono"
+                  className="font-mono uppercase"
                 />
               </div>
 
@@ -547,13 +688,13 @@ function DepositPage() {
                 {submitting ? "Initiating USSD Prompt..." : `Deposit ${formatUgx(amount)}`}
               </Button>
 
-              <p className="text-[11px] text-muted-foreground text-center">
+              <p className="text-center text-[11px] text-muted-foreground">
                 Minimum deposit UGX 1,000. You will receive an instant USSD prompt on your phone.
               </p>
             </form>
           )}
         </>
-      )}
+      ) : null}
     </main>
   );
 }

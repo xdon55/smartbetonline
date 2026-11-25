@@ -74,6 +74,7 @@ export function useLiveGames() {
 
   return {
     matches: displayMatches,
+    endedMatches: liveGamesSocket.getEndedMatches(),
     status,
     loading: loading && displayMatches.length === 0,
     refresh,

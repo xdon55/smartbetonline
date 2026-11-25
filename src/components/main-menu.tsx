@@ -17,16 +17,19 @@ import {
   Radio,
   Rocket,
   Spade,
+  Star,
   Trophy,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { usePrematchGames } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
 import { matches as fallbackMatches, flagFor } from "@/lib/betting-data";
+import { useFavorites } from "@/lib/favorites";
 
 const products = [
   { id: "sports", name: "Sports", icon: Trophy, to: "/sports" as const },
   { id: "live", name: "Live", icon: Radio, to: "/live" as const },
+  { id: "favorites", name: "Favorites", icon: Star, to: "/favorites" as const },
   { id: "casino", name: "Casino", icon: Spade, to: "/casino" as const },
   { id: "aviator", name: "Aviator", icon: Plane, to: "/aviator" as const },
   { id: "crash", name: "Crash", icon: Rocket, to: "/crash" as const },
@@ -40,6 +43,7 @@ export function MainMenu() {
 
   const { matches: prematchMatches } = usePrematchGames();
   const { matches: liveMatches } = useLiveGames();
+  const { isLeagueFavorited, toggleFavoriteLeague } = useFavorites();
 
   // Combine feeds for full sports coverage
   const allMatches = [
@@ -193,21 +197,47 @@ export function MainMenu() {
                   >
                     <div className="overflow-hidden">
                       <ul className="ml-2 border-l border-border pl-3 space-y-0.5 py-1">
-                        {c.leagues.map((l) => (
-                          <li key={l.name}>
-                            <Link
-                              to="/sports"
-                              search={{ league: l.name }}
-                              onClick={() => setOpen(false)}
-                              className="flex items-center justify-between rounded px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                            >
-                              <span className="truncate">{l.name}</span>
-                              <span className="ml-2 shrink-0 font-mono text-[10px] font-semibold opacity-70">
-                                ({l.count})
-                              </span>
-                            </Link>
-                          </li>
-                        ))}
+                        {c.leagues.map((l) => {
+                          const pinned = isLeagueFavorited(l.name, c.country);
+                          return (
+                            <li key={l.name} className="flex items-center gap-1">
+                              <Link
+                                to="/sports"
+                                search={{ league: l.name }}
+                                onClick={() => setOpen(false)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                              >
+                                <span className="truncate">{l.name}</span>
+                                <span className="ml-2 shrink-0 font-mono text-[10px] font-semibold opacity-70">
+                                  ({l.count})
+                                </span>
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  toggleFavoriteLeague({
+                                    league: l.name,
+                                    country: c.country,
+                                    sport: "Football",
+                                  })
+                                }
+                                aria-label={
+                                  pinned
+                                    ? `Unpin ${c.country} ${l.name}`
+                                    : `Pin ${c.country} ${l.name} to favorites`
+                                }
+                                aria-pressed={pinned}
+                                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors ${
+                                  pinned
+                                    ? "text-accent"
+                                    : "text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+                                }`}
+                              >
+                                <Star className={`h-3.5 w-3.5 ${pinned ? "fill-current" : ""}`} />
+                              </button>
+                            </li>
+                          );
+                        })}
                       </ul>
                     </div>
                   </div>

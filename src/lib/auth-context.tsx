@@ -3,10 +3,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Global reactive Authentication Context.
  *
- * Ensures sign-in and sign-out update every mounted consumer (SiteHeader,
- * AccountMenu, WalletProvider, Deposit, Withdraw, MyBets) synchronously,
- * and clears both SmartBet proxy/backend sessions and Supabase auth storage
- * cleanly on sign-out.
+ * Uses GET /api/Account/CheckLogin as the authoritative session source so
+ * expired or signed-out sessions never survive via stale localStorage.
+ * Updates all consumers synchronously on login, registration, and sign-out.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
@@ -18,6 +17,7 @@ export type AuthUser = {
   id: string;
   email: string | undefined;
   username?: string;
+  phoneNumber?: string;
 };
 
 export type AuthContextValue = {
@@ -30,6 +30,11 @@ export type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+const isSupabaseConfigured =
+  typeof import.meta !== "undefined" &&
+  Boolean(import.meta.env?.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY);
 
 function clearClientAuthStorage() {
   if (typeof window === "undefined") return;
@@ -67,12 +72,29 @@ function clearClientAuthStorage() {
   }
 }
 
+function mapRemoteUser(raw: Record<string, unknown>): AuthUser | null {
+  const userId = raw["UserId"] ?? raw["userId"] ?? raw["AccountId"] ?? raw["accountId"];
+  const userName = (raw["UserName"] ?? raw["userName"]) as string | undefined;
+  const phone = (raw["PhoneNumber"] ?? raw["phoneNumber"]) as string | undefined;
+  const email = (raw["Email"] ?? raw["email"]) as string | undefined;
+
+  if (!userId && !userName && !phone) return null;
+
+  return {
+    id: String(userId ?? userName ?? phone),
+    email: email || (userName ? `${userName}@smartbet.ug` : `${phone}@smartbet.ug`),
+    username: userName,
+    phoneNumber: phone,
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadSupabaseProfile = useCallback(async (userId: string): Promise<UserProfile | null> => {
+    if (!isSupabaseConfigured) return null;
     try {
       return await getCurrentUserProfile();
     } catch {
@@ -106,58 +128,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let nextUser: AuthUser | null = null;
     let nextProfile: UserProfile | null = null;
 
-    // 1. Check local cached user
+    // 1. Authoritative check with SmartBet Online API (GET /api/Account/CheckLogin)
     try {
-      const stored = localStorage.getItem("smartbet_active_user");
-      if (stored) {
-        const u = JSON.parse(stored);
-        if (u && (u.UserId || u.PhoneNumber || u.UserName)) {
+      const remote = await smartBetApi.checkLogin();
+      if (remote && typeof remote === "object") {
+        const mapped = mapRemoteUser(remote as unknown as Record<string, unknown>);
+        if (mapped) {
+          nextUser = mapped;
+          try {
+            localStorage.setItem("smartbet_active_user", JSON.stringify(remote));
+          } catch {
+            // Ignore storage error
+          }
+        }
+      }
+    } catch {
+      // Network/timeout fallback only
+    }
+
+    // 2. Check active Supabase session if configured
+    if (isSupabaseConfigured) {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.user) {
+          const sUser = session.user;
           nextUser = {
-            id: String(u.UserId || u.AccountId),
-            email: u.Email || `${u.UserName || u.PhoneNumber}@smartbet.ug`,
-            username: u.UserName,
+            id: sUser.id,
+            email: sUser.email,
+            username: sUser.user_metadata?.display_name || sUser.email?.split("@")[0],
           };
+          nextProfile = await loadSupabaseProfile(sUser.id);
         }
+      } catch {
+        // Supabase offline
       }
-    } catch {
-      // Storage empty or unparseable
     }
 
-    // 2. Verify with SmartBet API CheckLogin
-    try {
-      const remoteUser = await smartBetApi.checkLogin();
-      if (remoteUser && (remoteUser.UserId || remoteUser.AccountId || remoteUser.UserName)) {
-        nextUser = {
-          id: String(remoteUser.UserId || remoteUser.AccountId),
-          email: remoteUser.Email || `${remoteUser.UserName || remoteUser.PhoneNumber}@smartbet.ug`,
-          username: remoteUser.UserName,
-        };
-        try {
-          localStorage.setItem("smartbet_active_user", JSON.stringify(remoteUser));
-        } catch {
-          // Ignore storage error
+    // 3. Fall back to smartbet_active_user cache (populated by auth.tsx login/register)
+    if (!nextUser) {
+      try {
+        const stored = localStorage.getItem("smartbet_active_user");
+        if (stored) {
+          nextUser = mapRemoteUser(JSON.parse(stored) as Record<string, unknown>);
         }
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Offline or unauthenticated
-    }
-
-    // 3. Check active Supabase session
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session?.user) {
-        const sUser = session.user;
-        nextUser = {
-          id: sUser.id,
-          email: sUser.email,
-          username: sUser.user_metadata?.display_name || sUser.email?.split("@")[0],
-        };
-        nextProfile = await loadSupabaseProfile(sUser.id);
-      }
-    } catch {
-      // Supabase offline
     }
 
     setUser(nextUser);
@@ -167,6 +185,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refreshAuth();
+
+    const handleSync = () => {
+      void refreshAuth();
+    };
+    window.addEventListener("smartbet:auth-changed", handleSync);
+    window.addEventListener("storage", handleSync);
+
+    if (!isSupabaseConfigured) {
+      return () => {
+        window.removeEventListener("smartbet:auth-changed", handleSync);
+        window.removeEventListener("storage", handleSync);
+      };
+    }
 
     const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session?.user) {
@@ -186,30 +217,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => {
+      window.removeEventListener("smartbet:auth-changed", handleSync);
+      window.removeEventListener("storage", handleSync);
       listener.subscription.unsubscribe();
     };
   }, [refreshAuth, loadSupabaseProfile]);
 
   const signOut = useCallback(async () => {
-    // 1. Immediately reflect signed-out state across all consumers
     setUser(null);
     setProfile(null);
 
-    // 2. Call SmartBet logOff (also clears smartbet_session_token & smartbet_active_user)
     try {
       await smartBetApi.logOff();
     } catch {
       // Safe if offline
     }
 
-    // 3. Sign out of Supabase locally & globally
-    try {
-      await supabase.auth.signOut({ scope: "local" });
-    } catch {
-      // Fallback
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.auth.signOut({ scope: "local" });
+      } catch {
+        // Fallback
+      }
     }
 
-    // 4. Wipe any remaining local auth tokens
     clearClientAuthStorage();
   }, []);
 

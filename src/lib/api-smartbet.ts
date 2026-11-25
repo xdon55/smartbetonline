@@ -134,6 +134,7 @@ export interface DepositStatusResponse {
   Status?: string;
   amount: number;
   balance?: number;
+  Balance?: number;
   updateTime?: string;
 }
 
@@ -159,6 +160,8 @@ export interface WithdrawResponse {
   transactionId?: string;
   amount?: number;
   balance?: number;
+  Balance?: number;
+  phoneNumber?: string;
   message?: string;
 }
 
@@ -167,6 +170,7 @@ export interface WithdrawAtBranchResponse {
   Code?: string;
   amount?: number;
   balance?: number;
+  Balance?: number;
   status?: string;
   expiresIn?: string;
   message?: string;
@@ -176,6 +180,31 @@ export interface OnlineSettings {
   MinStake: number;
   MaxStake: number;
   MaxPayOut: number;
+}
+
+export interface FavoriteMatchRecord {
+  matchId: string;
+  home: string;
+  away: string;
+  league: string;
+  country: string;
+  sport: string;
+  startsAt: string;
+  pinnedAt: string;
+}
+
+export interface FavoriteLeagueRecord {
+  key: string;
+  league: string;
+  country: string;
+  sport: string;
+  pinnedAt: string;
+}
+
+export interface UserFavoritesPayload {
+  matches: FavoriteMatchRecord[];
+  leagues: FavoriteLeagueRecord[];
+  updatedAt: string;
 }
 
 export class ApiError extends Error {
@@ -240,6 +269,27 @@ function setSmartBetSession(token: string | undefined): void {
   }
 }
 
+function getSmartBetActiveUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem("smartbet_active_user");
+    if (!raw) return null;
+    const u = JSON.parse(raw) as Record<string, unknown>;
+    const uid =
+      u?.UserId ??
+      u?.userId ??
+      u?.AccountId ??
+      u?.accountId ??
+      u?.UserName ??
+      u?.userName ??
+      u?.PhoneNumber ??
+      u?.phoneNumber;
+    return uid ? String(uid) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resilient JSON fetch with timeout, credential cookies, and error decoding.
  */
@@ -257,6 +307,7 @@ async function fetchJson<T>(
     const isPublicGamesFeed = url.includes("api-games.smbet.net");
     const credentialsMode: RequestCredentials = isPublicGamesFeed ? "omit" : "include";
     const sessionToken = !isPublicGamesFeed ? getSmartBetSession() : null;
+    const activeUserId = !isPublicGamesFeed ? getSmartBetActiveUserId() : null;
 
     const response = await fetch(url, {
       ...options,
@@ -266,6 +317,7 @@ async function fetchJson<T>(
         Accept: "application/json",
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...(sessionToken ? { "X-SmartBet-Session": sessionToken } : {}),
+        ...(activeUserId ? { "X-User-Id": activeUserId } : {}),
         ...options.headers,
       },
     });
@@ -277,8 +329,16 @@ async function fetchJson<T>(
     }
 
     const contentType = response.headers.get("content-type") ?? "";
+    const rawText = await response.text();
     const isJson = contentType.includes("application/json");
-    const data = isJson ? await response.json() : await response.text();
+    let data: unknown = rawText;
+    if (isJson && rawText) {
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = rawText;
+      }
+    }
 
     if (!response.ok) {
       let errMsg = `Request failed (${response.status})`;
@@ -291,7 +351,7 @@ async function fetchJson<T>(
       throw new ApiError(errMsg, response.status, data);
     }
 
-    return data as T;
+    return (rawText === "" ? null : data) as T;
   } catch (error) {
     clearTimeout(timer);
     if (error instanceof ApiError) throw error;
@@ -378,20 +438,27 @@ export const smartBetApi = {
     return fetchJson<{ available: boolean }>(
       buildUrl(
         API_CONFIG.backendUrl,
-        `/api/Account/CheckUsername?value=${encodeURIComponent(value)}`,
+        `/api/Account/CheckUsername?value=${encodeURIComponent(value.trim())}`,
       ),
     );
   },
 
   async checkPhone(value: string): Promise<{ available: boolean }> {
+    const normalized = formatSmartBetPhone(value) || value.trim();
     return fetchJson<{ available: boolean }>(
-      buildUrl(API_CONFIG.backendUrl, `/api/Account/CheckPhone?value=${encodeURIComponent(value)}`),
+      buildUrl(
+        API_CONFIG.backendUrl,
+        `/api/Account/CheckPhone?value=${encodeURIComponent(normalized)}`,
+      ),
     );
   },
 
   async checkEmail(value: string): Promise<{ available: boolean }> {
     return fetchJson<{ available: boolean }>(
-      buildUrl(API_CONFIG.backendUrl, `/api/Account/CheckEmail?value=${encodeURIComponent(value)}`),
+      buildUrl(
+        API_CONFIG.backendUrl,
+        `/api/Account/CheckEmail?value=${encodeURIComponent(value.trim())}`,
+      ),
     );
   },
 
@@ -399,7 +466,7 @@ export const smartBetApi = {
     return fetchJson<boolean>(
       buildUrl(
         API_CONFIG.backendUrl,
-        `/api/Online/UserExists?userName=${encodeURIComponent(userName)}`,
+        `/api/Online/UserExists?userName=${encodeURIComponent(userName.trim())}`,
       ),
     );
   },
@@ -413,7 +480,12 @@ export const smartBetApi = {
     FirstName: string;
     SurName: string;
     PromoCode?: string | null;
-  }): Promise<{ success: boolean; message?: string; otpExpiry?: string; SessionId?: string }> {
+  }): Promise<{
+    success: boolean;
+    message?: string;
+    otpExpiry?: string;
+    SessionId?: string;
+  }> {
     const res = await fetchJson<{
       success: boolean;
       message?: string;
@@ -421,17 +493,21 @@ export const smartBetApi = {
       SessionId?: string;
     }>(buildUrl(API_CONFIG.backendUrl, "/api/Account/Register"), {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        phoneNumber: formatSmartBetPhone(payload.phoneNumber) || payload.phoneNumber,
+      }),
     });
     if (res?.SessionId) setSmartBetSession(res.SessionId);
     return res;
   },
 
   async getOtp(phoneNumber: string): Promise<boolean> {
+    const normalized = formatSmartBetPhone(phoneNumber) || phoneNumber.trim();
     return fetchJson<boolean>(
       buildUrl(
         API_CONFIG.backendUrl,
-        `/api/Account/GetOTP?phoneNumber=${encodeURIComponent(phoneNumber)}`,
+        `/api/Account/GetOTP?phoneNumber=${encodeURIComponent(normalized)}`,
       ),
     );
   },
@@ -440,9 +516,10 @@ export const smartBetApi = {
     phoneNumber: string,
     otpCode: string,
   ): Promise<{ valid: boolean; message?: string }> {
+    const normalized = formatSmartBetPhone(phoneNumber) || phoneNumber.trim();
     return fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Account/validate-otp"), {
       method: "POST",
-      body: JSON.stringify({ phoneNumber, otpCode }),
+      body: JSON.stringify({ phoneNumber: normalized, otpCode: otpCode.trim() }),
     });
   },
 
@@ -451,11 +528,21 @@ export const smartBetApi = {
     otpCode: string;
     newPassword: string;
     confirmPassword: string;
-  }): Promise<{ success: boolean; message?: string }> {
-    return fetchJson(buildUrl(API_CONFIG.backendUrl, "/api/Account/VerifyOtpAndSetPassword"), {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+  }): Promise<SmartBetUser & { success?: boolean; message?: string }> {
+    const normalized = formatSmartBetPhone(payload.phoneNumber) || payload.phoneNumber.trim();
+    const res = await fetchJson<SmartBetUser & { success?: boolean; message?: string }>(
+      buildUrl(API_CONFIG.backendUrl, "/api/Account/VerifyOtpAndSetPassword"),
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...payload,
+          phoneNumber: normalized,
+          otpCode: payload.otpCode.trim(),
+        }),
+      },
+    );
+    if (res?.SessionId) setSmartBetSession(res.SessionId);
+    return res;
   },
 
   async setNewPassword(payload: {
@@ -611,6 +698,31 @@ export const smartBetApi = {
   async getOnlineSettings(): Promise<OnlineSettings> {
     return fetchJson<OnlineSettings>(
       buildUrl(API_CONFIG.backendUrl, "/api/CompanySettings/OnlineSettings"),
+    );
+  },
+
+  // ── 8. User Favorites (Pinned Matches & Leagues) ──────────────────────────
+  async getFavorites(userId?: string): Promise<UserFavoritesPayload> {
+    return fetchJson<UserFavoritesPayload>(
+      buildUrl(API_CONFIG.backendUrl, "/api/Online/Favorites"),
+      {
+        method: "GET",
+        headers: userId ? { "X-User-Id": userId } : undefined,
+      },
+    );
+  },
+
+  async saveFavorites(
+    payload: UserFavoritesPayload,
+    userId?: string,
+  ): Promise<UserFavoritesPayload> {
+    return fetchJson<UserFavoritesPayload>(
+      buildUrl(API_CONFIG.backendUrl, "/api/Online/Favorites"),
+      {
+        method: "PUT",
+        headers: userId ? { "X-User-Id": userId } : undefined,
+        body: JSON.stringify(payload),
+      },
     );
   },
 };

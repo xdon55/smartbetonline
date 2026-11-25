@@ -5,7 +5,13 @@
  * application's standard Match, Market, and Outcome data types.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import type { Match, Market, Outcome, KickoffDay } from "./betting-data";
+import {
+  filterLiveMarkets,
+  type Match,
+  type Market,
+  type Outcome,
+  type KickoffDay,
+} from "./betting-data";
 import type { PrematchGame, PrematchMatchOdd } from "./api-smartbet";
 
 const KNOWN_COUNTRIES = [
@@ -309,22 +315,51 @@ export function adaptPrematchGame(game: PrematchGame): Match {
 export interface LiveSocketGameRaw {
   std: number | string; // match ID
   cd?: string | number; // short code
+  b?: number; // game-level blocked/suspended flag
   t1?: { n?: string }; // home team
   t2?: { n?: string }; // away team
   inf?: string; // league
-  sc?: { goal?: string | number[] }; // score
+  sc?: {
+    goal?: string | number[];
+    h1?: string | number[];
+    corner?: string | number[];
+    yellowCard?: string | number[];
+    redCard?: string | number[];
+  }; // score
   tm?: number; // match clock
   tss?: string | number;
   st?: string; // status
   stn?: string;
+  p?: number; // period
   bt?: Array<{
     id?: string | number;
     n?: string;
     b?: number;
-    h?: number;
+    h?: number | null;
     o?: Array<{ id?: string | number; n?: string; v?: number; b?: number }>;
     items?: Array<{ id?: string | number; n?: string; p?: number; b?: number }>;
   }>;
+}
+
+function parseScorePair(val?: string | number[]): [number, number] | undefined {
+  if (!val) return undefined;
+  if (typeof val === "string" && val.includes(":")) {
+    const parts = val.split(":");
+    return [parseInt(parts[0] ?? "0", 10) || 0, parseInt(parts[1] ?? "0", 10) || 0];
+  }
+  if (Array.isArray(val) && val.length >= 2) {
+    return [Number(val[0]) || 0, Number(val[1]) || 0];
+  }
+  return undefined;
+}
+
+function formatOrdinal(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  if (n % 10 === 1) return `${n}st`;
+  if (n % 10 === 2) return `${n}nd`;
+  if (n % 10 === 3) return `${n}rd`;
+  return `${n}th`;
 }
 
 /**
@@ -334,54 +369,108 @@ export function adaptLiveGame(raw: LiveSocketGameRaw, previousMatch?: Match): Ma
   let homeScore = 0;
   let awayScore = 0;
 
-  if (raw.sc?.goal) {
-    if (typeof raw.sc.goal === "string" && raw.sc.goal.includes(":")) {
-      const parts = raw.sc.goal.split(":");
-      homeScore = parseInt(parts[0] ?? "0", 10) || 0;
-      awayScore = parseInt(parts[1] ?? "0", 10) || 0;
-    } else if (Array.isArray(raw.sc.goal) && raw.sc.goal.length >= 2) {
-      homeScore = Number(raw.sc.goal[0]) || 0;
-      awayScore = Number(raw.sc.goal[1]) || 0;
-    }
+  const parsedGoal = parseScorePair(raw.sc?.goal);
+  if (parsedGoal) {
+    [homeScore, awayScore] = parsedGoal;
   } else if (previousMatch?.live) {
     homeScore = previousMatch.live.homeScore;
     awayScore = previousMatch.live.awayScore;
   }
 
+  const parsedH1 = parseScorePair(raw.sc?.h1);
+  const h1HomeScore = parsedH1 ? parsedH1[0] : previousMatch?.live?.h1HomeScore;
+  const h1AwayScore = parsedH1 ? parsedH1[1] : previousMatch?.live?.h1AwayScore;
+  const corners = parseScorePair(raw.sc?.corner) ?? previousMatch?.live?.corners;
+  const yellowCards = parseScorePair(raw.sc?.yellowCard) ?? previousMatch?.live?.yellowCards;
+  const redCards = parseScorePair(raw.sc?.redCard) ?? previousMatch?.live?.redCards;
+
   const { country, league } = parseCountryAndLeague(raw.inf);
 
+  const isGameBlocked = Boolean(raw.b && raw.b > 0);
+  const hasSnapshotMarkets = Array.isArray(raw.bt);
   const rawMarkets = raw.bt || [];
-  let markets: Market[] = rawMarkets.map((m, idx) => {
+
+  const markets: Market[] = rawMarkets.map((m) => {
     const rawOdds = m.o || m.items || [];
-    const isMarketBlocked = Boolean(m.b && m.b > 0);
+    const isMarketBlocked = isGameBlocked || Boolean(m.b && m.b > 0);
 
     const rawName = (m.n || "").trim();
     let marketName = rawName || "1X2";
     let marketId = marketName.toLowerCase();
 
     const upperName = rawName.toUpperCase();
+    const isH1Market =
+      /\b(1ST\s*HALF|FIRST\s*HALF|H1|1H|HT)\b/.test(upperName) || upperName.includes("_H1");
+    const isH2Market =
+      /\b(2ND\s*HALF|SECOND\s*HALF|H2|2H)\b/.test(upperName) || upperName.includes("_H2");
+    const isOverUnderName =
+      upperName === "OU" ||
+      upperName === "OVER/UNDER" ||
+      upperName === "OVER / UNDER" ||
+      upperName === "TOTAL GOALS" ||
+      upperName.startsWith("OU_") ||
+      upperName.includes("TOTAL GOALS") ||
+      upperName.includes("OVER/UNDER");
+
+    const sngMatch = upperName.match(/^S(\d+)G$/);
+    const hasNumericLine = m.h !== undefined && m.h !== null && Number.isFinite(Number(m.h));
+    const normalizedLine = hasNumericLine ? Number(Number(m.h).toFixed(2)) : undefined;
+
     if (upperName === "1X2" || upperName === "MAIN 1X2") {
       marketId = "1x2";
       marketName = "1X2";
     } else if (upperName === "BTS" || upperName === "BTTS" || upperName === "BOTH TEAMS TO SCORE") {
       marketId = "btts";
       marketName = "Both teams to score";
+    } else if (upperName === "BTS_H1" || upperName === "BTTS_H1") {
+      marketId = "btts_h1";
+      marketName = "1st Half Both teams to score";
+    } else if (upperName === "BTS_H2" || upperName === "BTTS_H2") {
+      marketId = "btts_h2";
+      marketName = "2nd Half Both teams to score";
+    } else if (upperName === "RBTS") {
+      marketId = "rbts";
+      marketName = "Result & Both teams to score";
     } else if (upperName === "DC" || upperName === "DOUBLE CHANCE") {
       marketId = "dc";
       marketName = "Double chance";
+    } else if (upperName === "DC_H1") {
+      marketId = "dc_h1";
+      marketName = "1st Half Double chance";
     } else if (upperName === "DNB" || upperName === "DRAW NO BET") {
       marketId = "dnb";
       marketName = "Draw no bet";
     } else if (upperName === "1X2_H1" || upperName === "1ST HALF 1X2") {
       marketId = "1x2_h1";
       marketName = "1st Half 1X2";
-    } else if (upperName === "OU" || upperName === "OVER/UNDER" || upperName.startsWith("OU_")) {
-      const lineStr = m.h !== undefined && m.h !== null ? String(m.h) : "2.5";
-      marketId = `ou${lineStr.replace(".", "")}`;
-      marketName = `Total goals ${lineStr}`;
+    } else if (upperName === "CS_H1") {
+      marketId = "cs_h1";
+      marketName = "1st Half Correct score";
+    } else if (upperName === "CS") {
+      marketId = "cs";
+      marketName = "Correct score";
+    } else if (sngMatch) {
+      const goalNum = Number(sngMatch[1]);
+      marketId = `s${goalNum}g`;
+      marketName = `${formatOrdinal(goalNum)} Goal`;
+    } else if (isOverUnderName) {
+      const extracted = normalizedLine !== undefined ? String(normalizedLine) : null;
+      const nameNum = rawName
+        .replace(/\b(1st|2nd|first|second|half|ht|h1|h2)\b/gi, "")
+        .match(/\d+(?:\.\d+)?/);
+      const lineStr = extracted || (nameNum ? nameNum[0] : "2.5");
+      const slug = lineStr.replace(".", "_");
+      if (isH1Market) {
+        marketId = `ou_h1_${slug}`;
+        marketName = `1st Half Total goals ${lineStr}`;
+      } else if (isH2Market) {
+        marketId = `ou_h2_${slug}`;
+        marketName = `2nd Half Total goals ${lineStr}`;
+      } else {
+        marketId = lineStr === "2.5" ? "ou25" : `ou_${slug}`;
+        marketName = `Total goals ${lineStr}`;
+      }
     }
-
-    const prevMarket = previousMatch?.markets.find((pm) => pm.id === marketId);
 
     const outcomes: Outcome[] = rawOdds.map((item, i) => {
       let oddVal = 0;
@@ -392,31 +481,32 @@ export function adaptLiveGame(raw: LiveSocketGameRaw, previousMatch?: Match): Ma
       }
 
       const isOutcomeBlocked = Boolean(item.b && item.b > 0);
-
-      // If missing in an incremental delta update, fall back to previous market outcome
-      if (oddVal <= 0 && prevMarket && !isMarketBlocked && !isOutcomeBlocked) {
-        const prevOutcome = prevMarket.outcomes.find(
-          (po) =>
-            po.id === String(item.id || item.n || i) || po.label === (item.n || String(i + 1)),
-        );
-        if (prevOutcome && prevOutcome.odds > 0) {
-          oddVal = prevOutcome.odds;
-        }
-      }
-
       const locked = isMarketBlocked || isOutcomeBlocked || oddVal <= 0;
 
       return {
         id: String(item.id || item.n || i),
         label: item.n || String(i + 1),
-        odds: oddVal > 0 ? Number(oddVal.toFixed(2)) : 0,
+        odds: !locked && oddVal > 0 ? Number(oddVal.toFixed(2)) : 0,
         locked,
+        line: normalizedLine,
         betCategory: m.n,
       };
     });
 
-    // Sort outcomes according to standard betting order
-    const order = OUTCOME_ORDER[marketId];
+    // Sort outcomes according to standard sports betting conventions
+    const liveOutcomeOrder: Record<string, string[]> = {
+      ...OUTCOME_ORDER,
+      dc_h1: ["1X", "12", "X2"],
+      btts_h1: ["Yes", "No"],
+      btts_h2: ["Yes", "No"],
+      rbts: ["1-Yes", "1-No", "X-Yes", "X-No", "2-Yes", "2-No"],
+    };
+
+    const order =
+      liveOutcomeOrder[marketId] ||
+      (sngMatch ? ["1", "No goal", "2"] : undefined) ||
+      (isOverUnderName ? ["Over", "Under"] : undefined);
+
     if (order) {
       outcomes.sort((a, b) => {
         const ia = order.indexOf(a.label);
@@ -425,6 +515,23 @@ export function adaptLiveGame(raw: LiveSocketGameRaw, previousMatch?: Match): Ma
         if (ia !== -1) return -1;
         if (ib !== -1) return 1;
         return a.label.localeCompare(b.label);
+      });
+    } else if (marketId === "cs" || marketId === "cs_h1") {
+      outcomes.sort((a, b) => {
+        const ma = a.label.match(/^(\d+)\s*[-:]\s*(\d+)$/);
+        const mb = b.label.match(/^(\d+)\s*[-:]\s*(\d+)$/);
+        if (!ma && !mb) return a.label.localeCompare(b.label);
+        if (!ma) return 1;
+        if (!mb) return -1;
+        const ha = Number(ma[1]);
+        const aa = Number(ma[2]);
+        const hb = Number(mb[1]);
+        const ab = Number(mb[2]);
+        const ta = ha + aa;
+        const tb = hb + ab;
+        if (ta !== tb) return ta - tb;
+        if (ha !== hb) return ha - hb;
+        return aa - ab;
       });
     }
 
@@ -435,15 +542,20 @@ export function adaptLiveGame(raw: LiveSocketGameRaw, previousMatch?: Match): Ma
     };
   });
 
-  // If new packet had no markets but previous match did, retain previous markets
-  if (markets.length === 0 && previousMatch && previousMatch.markets.length > 0) {
-    markets = previousMatch.markets;
+  // Authoritative snapshot replacement: when raw.bt is present, replace markets so closed/suspended
+  // lines don't persist with stale odds; only preserve previousMatch.markets if bt is omitted.
+  const activeSnapshotMarkets = hasSnapshotMarkets
+    ? markets.filter((m) => m.outcomes.length > 0)
+    : (previousMatch?.markets ?? []).filter((m) => m.outcomes.length > 0);
+
+  const marketMap = new Map<string, Market>();
+  for (const m of activeSnapshotMarkets) {
+    marketMap.set(m.id, m);
   }
 
   // Sort markets to prioritize 1X2, OU 2.5, BTTS, DC, DNB
-  const PRIORITY_ORDER = ["1x2", "ou25", "btts", "dc", "dnb", "ou15", "ou35", "1x2_h1"];
+  const PRIORITY_ORDER = ["1x2", "ou25", "btts", "dc", "dnb", "ou_1_5", "ou_3_5", "1x2_h1"];
   const sortedMarkets: Market[] = [];
-  const marketMap = new Map(markets.map((m) => [m.id, m]));
 
   for (const prioId of PRIORITY_ORDER) {
     const m = marketMap.get(prioId);
@@ -456,14 +568,21 @@ export function adaptLiveGame(raw: LiveSocketGameRaw, previousMatch?: Match): Ma
     if (m.outcomes.length > 0) sortedMarkets.push(m);
   });
 
-  let minute = previousMatch?.live?.minute || 45;
+  let minute = previousMatch?.live?.minute ?? 0;
   if (typeof raw.tss === "string" && raw.tss.includes(":")) {
-    minute = parseInt(raw.tss.split(":")[0] ?? "45", 10) || 45;
-  } else if (typeof raw.tm === "number" && raw.tm > 0) {
-    minute = Math.min(90, Math.max(1, Math.floor(raw.tm / 60)));
+    const parsedMin = parseInt(raw.tss.split(":")[0] ?? "", 10);
+    if (Number.isFinite(parsedMin)) {
+      minute = parsedMin;
+    }
+  } else if (typeof raw.tm === "number" && raw.tm >= 0) {
+    minute = Math.min(120, Math.floor(raw.tm / 60));
   }
 
-  return {
+  const statusStr =
+    [raw.st, raw.stn].filter(Boolean).join(" ").trim() || previousMatch?.live?.status;
+  const periodVal = typeof raw.p === "number" && raw.p > 0 ? raw.p : previousMatch?.live?.period;
+
+  const adaptedMatch: Match = {
     id: String(raw.std || raw.cd || previousMatch?.id || Math.random().toString(36).slice(2, 8)),
     sport: "Football",
     league: league && league !== "Live" ? league : previousMatch?.league || "Live In-Play",
@@ -477,8 +596,22 @@ export function adaptLiveGame(raw: LiveSocketGameRaw, previousMatch?: Match): Ma
       minute,
       homeScore,
       awayScore,
+      ...(statusStr ? { status: statusStr } : {}),
+      ...(periodVal !== undefined ? { period: periodVal } : {}),
+      ...(h1HomeScore !== undefined ? { h1HomeScore } : {}),
+      ...(h1AwayScore !== undefined ? { h1AwayScore } : {}),
+      ...(corners ? { corners } : {}),
+      ...(yellowCards ? { yellowCards } : {}),
+      ...(redCards ? { redCards } : {}),
     },
-    marketCount: sortedMarkets.length > 0 ? sortedMarkets.length : 12,
+    marketCount: sortedMarkets.length,
     markets: sortedMarkets,
+  };
+
+  const activeMarkets = filterLiveMarkets(adaptedMatch, sortedMarkets);
+  return {
+    ...adaptedMatch,
+    markets: activeMarkets,
+    marketCount: activeMarkets.length,
   };
 }

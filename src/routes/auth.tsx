@@ -7,7 +7,7 @@
  * - POST /api/Account/validate-otp & POST /api/Account/VerifyOtpAndSetPassword
  * - PostgreSQL user profile & preferences sync in Supabase
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -18,10 +18,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { smartBetApi } from "@/lib/api-smartbet";
 import { supabase } from "@/integrations/supabase/client";
 import { syncUserProfile } from "@/lib/supabase-sportsbook";
-import { useWallet } from "@/hooks/use-wallet";
-import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/auth")({
+  validateSearch: (search: Record<string, unknown>): { tab?: "login" | "register" } => ({
+    tab: search.tab === "register" ? "register" : search.tab === "login" ? "login" : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Sign in or register · SMARTBET" },
@@ -42,10 +43,18 @@ export const Route = createFileRoute("/auth")({
 
 function AuthPage() {
   const router = useRouter();
-  const { refreshAuth } = useAuth();
-  const { refresh } = useWallet();
+  const { tab } = Route.useSearch();
+  const [activeTab, setActiveTab] = useState<"login" | "register">(tab ?? "login");
   const [agree, setAgree] = useState(false);
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (tab === "login" || tab === "register") {
+      setActiveTab(tab);
+      setRegStep("form");
+      setShowForgot(false);
+    }
+  }, [tab]);
 
   // Registration step states: 'form' | 'otp' | 'success'
   const [regStep, setRegStep] = useState<"form" | "otp" | "success">("form");
@@ -140,8 +149,7 @@ function AuthPage() {
         );
       }
 
-      await refreshAuth();
-      await refresh();
+      window.dispatchEvent(new Event("smartbet:auth-changed"));
       toast.success("Welcome back to SMARTBET!");
       router.navigate({ to: "/" });
     } catch (err) {
@@ -242,9 +250,8 @@ function AuthPage() {
           Balance: 0,
         }),
       );
+      window.dispatchEvent(new Event("smartbet:auth-changed"));
 
-      await refreshAuth();
-      await refresh();
       if (requiresOtp) {
         setRegStep("otp");
         toast.info(`Verification code sent to ${phone}`);
@@ -273,8 +280,6 @@ function AuthPage() {
         confirmPassword: regData.pass,
       });
 
-      await refreshAuth();
-      await refresh();
       setRegStep("success");
       toast.success("Phone verified and account activated!");
     } catch (err) {
@@ -404,7 +409,10 @@ function AuthPage() {
           </div>
         </form>
       ) : (
-        <Tabs defaultValue="login">
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v === "register" ? "register" : "login")}
+        >
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="login">Sign in</TabsTrigger>
             <TabsTrigger value="register">Register</TabsTrigger>

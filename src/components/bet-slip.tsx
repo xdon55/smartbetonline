@@ -16,12 +16,14 @@ import { Trash2, X, Ticket, Copy, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { useBetSlip } from "@/lib/betslip";
 import { formatUgx } from "@/lib/betting-data";
+import { useAuth } from "@/hooks/use-auth";
 
 /** One-tap stake shortcuts (UGX). */
 const quickStakes = [1000, 2000, 5000, 10000];
 
 /** Shared slip content: selections list, stake controls, totals, actions. */
 function SlipBody() {
+  const { isAuthenticated } = useAuth();
   const {
     selections,
     remove,
@@ -67,13 +69,15 @@ function SlipBody() {
           <p className="text-[0.65rem] text-muted-foreground">
             Tap any odds to add a selection, or load a saved booking code.
           </p>
-          <Link
-            to="/my-bets"
-            className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/80 px-3 py-1.5 text-xs font-bold text-secondary-foreground transition-all hover:border-accent/60 hover:bg-secondary hover:text-foreground"
-          >
-            <Receipt className="h-3.5 w-3.5 text-accent" />
-            View my bets
-          </Link>
+          {isAuthenticated && (
+            <Link
+              to="/my-bets"
+              className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/80 px-3 py-1.5 text-xs font-bold text-secondary-foreground transition-all hover:border-accent/60 hover:bg-secondary hover:text-foreground"
+            >
+              <Receipt className="h-3.5 w-3.5 text-accent" />
+              View my bets
+            </Link>
+          )}
         </div>
 
         {/* Load Booking Code Widget */}

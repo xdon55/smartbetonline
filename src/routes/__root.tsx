@@ -21,6 +21,7 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { BetSlipProvider } from "../lib/betslip";
 import { AuthProvider } from "../lib/auth-context";
+import { FavoritesProvider } from "../lib/favorites";
 import { WalletProvider } from "../lib/wallet-context";
 import { SiteHeader } from "../components/site-header";
 import { ProductStrip } from "../components/product-strip";
@@ -161,19 +162,21 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <WalletProvider>
-          <BetSlipProvider>
-            <div className="min-h-screen bg-background pb-20 pt-30 md:pb-8">
-              <SiteHeader />
-              <ProductStrip />
-              {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-              <Outlet />
-              <SiteFooter />
-              <BottomNav />
-            </div>
-            <Toaster />
-          </BetSlipProvider>
-        </WalletProvider>
+        <FavoritesProvider>
+          <WalletProvider>
+            <BetSlipProvider>
+              <div className="min-h-screen bg-background pb-20 pt-30 md:pb-8">
+                <SiteHeader />
+                <ProductStrip />
+                {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+                <Outlet />
+                <SiteFooter />
+                <BottomNav />
+              </div>
+              <Toaster />
+            </BetSlipProvider>
+          </WalletProvider>
+        </FavoritesProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

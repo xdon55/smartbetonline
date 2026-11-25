@@ -6,7 +6,7 @@
  * Automatically monitors payment verification status via:
  *   GET /api/Online/DepositStatus/{code}
  * Tracks telecom USSD timeout countdown (90s window), live balance updates,
- * and synchronizes verified transactions with the Supabase ledger.
+ * and optional Supabase ledger updates when configured.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -24,10 +24,16 @@ export interface PollerState {
   countdown: number;
   newBalance: number | null;
   errorMessage: string | null;
+  checking: boolean;
 }
 
-const POLLING_INTERVAL_MS = 3000;
+const POLLING_INTERVAL_MS = 2500;
 const INITIAL_COUNTDOWN_SECONDS = 90;
+
+const isSupabaseConfigured =
+  typeof import.meta !== "undefined" &&
+  Boolean(import.meta.env?.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY);
 
 export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) => void) {
   const [state, setState] = useState<PollerState>({
@@ -39,6 +45,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
     countdown: INITIAL_COUNTDOWN_SECONDS,
     newBalance: null,
     errorMessage: null,
+    checking: false,
   });
 
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,12 +70,26 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
   }, []);
 
   const checkStatus = useCallback(
-    async (code: string, currentAmount: number) => {
+    async (code: string, currentAmount: number, manual = false) => {
       if (!activeCodeRef.current || activeCodeRef.current !== code) return;
+
+      if (manual) {
+        if (pollTimerRef.current) {
+          clearTimeout(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+        setState((prev) => ({ ...prev, checking: true }));
+      }
 
       try {
         const res: DepositStatusResponse = await smartBetApi.getDepositStatus(code);
         const remoteStatus = String(res?.status || res?.Status || "").toUpperCase();
+        const remoteBalance =
+          typeof res.balance === "number"
+            ? res.balance
+            : typeof res.Balance === "number"
+              ? res.Balance
+              : undefined;
 
         if (
           remoteStatus === "SUCCESSFUL" ||
@@ -79,18 +100,20 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
           setState((prev) => ({
             ...prev,
             status: "success",
-            newBalance: typeof res.balance === "number" ? res.balance : null,
+            checking: false,
+            newBalance: remoteBalance ?? null,
           }));
 
-          // Mark transaction completed in Supabase
-          updateTransactionStatus(code, "completed", {
-            verifiedAt: new Date().toISOString(),
-            status: "SUCCESSFUL",
-            finalBalance: res.balance,
-          }).catch(console.warn);
+          if (isSupabaseConfigured) {
+            updateTransactionStatus(code, "completed", {
+              verifiedAt: new Date().toISOString(),
+              status: "SUCCESSFUL",
+              finalBalance: remoteBalance,
+            }).catch(console.warn);
+          }
 
           if (onSuccessRef.current) {
-            onSuccessRef.current(res.amount || currentAmount, res.balance);
+            onSuccessRef.current(res.amount || currentAmount, remoteBalance);
           }
           return;
         }
@@ -104,27 +127,37 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
           setState((prev) => ({
             ...prev,
             status: "failed",
+            checking: false,
             errorMessage: "USSD payment was declined or cancelled on the phone.",
           }));
 
-          updateTransactionStatus(code, "failed", {
-            failedAt: new Date().toISOString(),
-            status: remoteStatus,
-          }).catch(console.warn);
+          if (isSupabaseConfigured) {
+            updateTransactionStatus(code, "failed", {
+              failedAt: new Date().toISOString(),
+              status: remoteStatus,
+            }).catch(console.warn);
+          }
           return;
+        }
+
+        if (manual) {
+          setState((prev) => ({ ...prev, checking: false }));
         }
 
         // Still PENDING, OTP, or UNKNOWN -> queue next poll check
         if (activeCodeRef.current === code) {
           pollTimerRef.current = setTimeout(() => {
-            checkStatus(code, currentAmount);
+            void checkStatus(code, currentAmount);
           }, POLLING_INTERVAL_MS);
         }
       } catch {
-        // Network blip; retry polling until countdown ends
+        if (manual) {
+          setState((prev) => ({ ...prev, checking: false }));
+        }
+        // Retry polling until countdown ends
         if (activeCodeRef.current === code) {
           pollTimerRef.current = setTimeout(() => {
-            checkStatus(code, currentAmount);
+            void checkStatus(code, currentAmount);
           }, POLLING_INTERVAL_MS);
         }
       }
@@ -146,9 +179,9 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
         countdown: INITIAL_COUNTDOWN_SECONDS,
         newBalance: null,
         errorMessage: null,
+        checking: false,
       });
 
-      // Countdown tick every 1000ms
       countdownTimerRef.current = setInterval(() => {
         setState((prev) => {
           if (prev.countdown <= 1) {
@@ -156,6 +189,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
             return {
               ...prev,
               countdown: 0,
+              checking: false,
               status: prev.status === "success" ? "success" : "expired",
             };
           }
@@ -163,10 +197,9 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
         });
       }, 1000);
 
-      // Start initial status poll after 2 seconds
       pollTimerRef.current = setTimeout(() => {
         setState((prev) => (prev.status === "prompt_sent" ? { ...prev, status: "polling" } : prev));
-        checkStatus(code, amount);
+        void checkStatus(code, amount);
       }, 2000);
     },
     [cleanup, checkStatus],
@@ -175,7 +208,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
   const checkNow = useCallback(() => {
     if (state.code) {
       activeCodeRef.current = state.code;
-      checkStatus(state.code, state.amount);
+      void checkStatus(state.code, state.amount, true);
     }
   }, [state.code, state.amount, checkStatus]);
 
@@ -190,6 +223,7 @@ export function usePaymentPoller(onSuccess?: (amount: number, balance?: number) 
       countdown: INITIAL_COUNTDOWN_SECONDS,
       newBalance: null,
       errorMessage: null,
+      checking: false,
     });
   }, [cleanup]);
 

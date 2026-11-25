@@ -50,7 +50,18 @@ export type Match = {
   startsAt: string;
   day: KickoffDay;
   popular?: boolean;
-  live?: { minute: number; homeScore: number; awayScore: number };
+  live?: {
+    minute: number;
+    homeScore: number;
+    awayScore: number;
+    status?: string;
+    period?: number;
+    h1HomeScore?: number;
+    h1AwayScore?: number;
+    corners?: [number, number];
+    yellowCards?: [number, number];
+    redCards?: [number, number];
+  };
   marketCount: number;
   markets: Market[];
 };
@@ -430,15 +441,355 @@ export const countryFlags: Record<string, string> = {
 export const flagFor = (country: string) => countryFlags[country] ?? "🌐";
 
 /**
- * Returns full betting markets for the match detail page (/match/:id).
- * If the match already has loaded real markets from the feed, uses them directly.
+ * Extracts a numeric Over/Under line from a market's outcomes, name, or id.
  */
-export function detailMarkets(match: Match): Market[] {
-  if (match.markets && match.markets.length > 2) {
-    return match.markets;
+function parseOverUnderLine(market: Market): number | null {
+  for (const o of market.outcomes) {
+    if (o.line !== undefined && o.line !== null && o.line !== "") {
+      const n = Number(o.line);
+      if (Number.isFinite(n)) return n;
+    }
   }
 
-  const base = match.markets || [];
+  const cleanName = market.name
+    .replace(/\b1st\b/gi, "")
+    .replace(/\b2nd\b/gi, "")
+    .replace(/\bfirst\b/gi, "")
+    .replace(/\bsecond\b/gi, "")
+    .replace(/\bhalf\b/gi, "")
+    .replace(/\bht\b/gi, "")
+    .replace(/\bh1\b/gi, "")
+    .replace(/\bh2\b/gi, "")
+    .replace(/\bteam\s*[12]\b/gi, "");
+
+  const nameMatch = cleanName.match(/\d+(?:\.\d+)?/);
+  if (nameMatch) {
+    const n = Number(nameMatch[0]);
+    if (Number.isFinite(n)) return n;
+  }
+
+  const idMatch = market.id.toLowerCase().match(/ou_?(?:h[12]_)?(\d+)(?:_(\d+))?/);
+  if (idMatch) {
+    if (idMatch[2] !== undefined) {
+      const n = Number(`${idMatch[1]}.${idMatch[2]}`);
+      if (Number.isFinite(n)) return n;
+    }
+    const raw = idMatch[1]!;
+    if (raw.length === 2 && raw.endsWith("5")) {
+      return Number(`${raw[0]}.${raw[1]}`);
+    }
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+
+  return null;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Filters a live market's individual outcomes (e.g. Correct Score or Exact Goals)
+ * when specific outcomes have become mathematically impossible, or returns null
+ * when the entire market has exceeded its lifespan.
+ */
+function evaluateLiveMarket(match: Match, market: Market): Market | null {
+  const live = match.live;
+  if (!live) return market;
+
+  const minute = live.minute;
+  const homeScore = live.homeScore;
+  const awayScore = live.awayScore;
+  const totalGoals = homeScore + awayScore;
+  const statusLower = (live.status || "").toLowerCase();
+  const period = live.period;
+
+  const idLower = market.id.toLowerCase();
+  const nameLower = market.name.toLowerCase();
+  const betCats = market.outcomes.map((o) => (o.betCategory || "").toLowerCase()).join(" ");
+  const combined = `${idLower} ${nameLower} ${betCats}`;
+
+  // 0. Match finished -> all regular in-play markets expired
+  const isMatchEnded =
+    (period !== undefined && period >= 4) ||
+    /\b(ft|full\s*time|finished|ended|aet|after\s*extra|pen|penalties)\b/.test(statusLower);
+  if (isMatchEnded) {
+    return null;
+  }
+
+  // 1. Halftime / 1st Half period expiration
+  const isHalftimeOrLaterStatus =
+    /\b(ht|half\s*time|halftime|break|2h|2nd\s*half|second\s*half|et|extra\s*time)\b/.test(
+      statusLower,
+    );
+  const isPastFirstHalf =
+    minute > 45 || (period !== undefined && period >= 2) || isHalftimeOrLaterStatus;
+
+  const isSecondHalfOnly =
+    /\b(2nd\s*half|second\s*half|2h|h2)\b/.test(combined) || /(?:^|[_-])h2(?:$|[_-])/.test(idLower);
+
+  const isFirstHalfMarket =
+    !isSecondHalfOnly &&
+    (/\b(1st\s*half|first\s*half|half\s*time|halftime|half-time|1h|h1|ht|ht\/ft|htft)\b/.test(
+      combined,
+    ) ||
+      /(?:^|[_-])(h1|1h|ht)(?:$|[_-])/.test(idLower) ||
+      idLower.includes("ht/ft") ||
+      idLower.includes("htft"));
+
+  if (isFirstHalfMarket && isPastFirstHalf) {
+    return null;
+  }
+
+  // 2. Time-interval / minute-window markets (e.g. "1-15 min", "Goal in 0-30 min", "Result at 30 min")
+  const intervalMatch = nameLower.match(
+    /\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(?:min|mins|minutes|')\b/,
+  );
+  if (intervalMatch) {
+    const endMin = Number(intervalMatch[2]);
+    if (Number.isFinite(endMin) && minute > endMin) {
+      return null;
+    }
+  }
+  const thresholdMinMatch =
+    nameLower.match(/\b(?:1st|first|at|up\s*to|by)\s*(\d{1,2})\s*(?:min|mins|minutes|')\b/) ||
+    nameLower.match(
+      /\b(\d{1,2})\s*(?:min|mins|minutes)\s*(?:result|1x2|winner|goals|o\/u|over\/under)\b/,
+    );
+  if (thresholdMinMatch) {
+    const limitMin = Number(thresholdMinMatch[1]);
+    if (Number.isFinite(limitMin) && minute > limitMin) {
+      return null;
+    }
+  }
+
+  // 3. First Goal / Nth Goal / Next Goal markets
+  if (
+    /\b(first\s+goal|first\s+team\s+to\s+score|team\s+to\s+score\s+first|1st\s+goal|time\s+of\s+first\s+goal)\b/.test(
+      combined,
+    ) &&
+    totalGoals >= 1
+  ) {
+    return null;
+  }
+  const nthGoalMatch =
+    combined.match(/\b(\d+)(?:st|nd|rd|th)\s+goal\b/) ||
+    combined.match(/\bgoal\s+(\d+)\b/) ||
+    combined.match(/\bnext\s+goal\s*\(?(\d+)\)?\b/);
+  if (nthGoalMatch) {
+    const goalNum = Number(nthGoalMatch[1]);
+    if (Number.isFinite(goalNum) && totalGoals >= goalNum) {
+      return null;
+    }
+  }
+
+  // Team detection helpers
+  const homeLower = match.home.trim().toLowerCase();
+  const awayLower = match.away.trim().toLowerCase();
+  const mentionsHome =
+    (homeLower.length >= 2 && new RegExp(`\\b${escapeRegExp(homeLower)}\\b`).test(nameLower)) ||
+    /\b(home|team\s*1|t1)\b/.test(nameLower);
+  const mentionsAway =
+    (awayLower.length >= 2 && new RegExp(`\\b${escapeRegExp(awayLower)}\\b`).test(nameLower)) ||
+    /\b(away|team\s*2|t2)\b/.test(nameLower);
+  const isHomeOnly = mentionsHome && !mentionsAway;
+  const isAwayOnly = mentionsAway && !mentionsHome;
+
+  // 4. Clean Sheet / Win to Nil / Single Team to Score
+  if (/\bclean\s*sheet\b/.test(combined)) {
+    if (isHomeOnly && awayScore >= 1) return null;
+    if (isAwayOnly && homeScore >= 1) return null;
+  }
+  if (/\bwin\s+to\s+nil\b/.test(combined)) {
+    if (isHomeOnly && awayScore >= 1) return null;
+    if (isAwayOnly && homeScore >= 1) return null;
+  }
+  const isBothTeamsPhrase = /\bboth\s+teams?\b/.test(combined);
+  if (
+    !isBothTeamsPhrase &&
+    /\bto\s+score\b/.test(combined) &&
+    !/\b(first|last|next|both|most|half)\b/.test(combined)
+  ) {
+    if (isHomeOnly && homeScore >= 1) return null;
+    if (isAwayOnly && awayScore >= 1) return null;
+  }
+
+  // 5. Both Teams to Score (BTTS / BTS)
+  const isBttsMarket =
+    /\b(btts|bts|both\s+teams?\s+to\s+score)\b/.test(combined) || idLower.includes("btts");
+  const isComboWithResult = /\b(1x2|double\s+chance|dc|result|winner|dnb|draw\s+no\s+bet)\b/.test(
+    combined,
+  );
+
+  if (isBttsMarket && !isComboWithResult) {
+    if (isSecondHalfOnly) {
+      if (live.h1HomeScore !== undefined && live.h1AwayScore !== undefined) {
+        const h2Home = Math.max(0, homeScore - live.h1HomeScore);
+        const h2Away = Math.max(0, awayScore - live.h1AwayScore);
+        if (h2Home >= 1 && h2Away >= 1) return null;
+      }
+    } else if (!/\bboth\s+halves\b/.test(combined)) {
+      if (homeScore >= 1 && awayScore >= 1) {
+        // Also covers 1st half BTTS while still in 1st half
+        return null;
+      }
+    } else if (
+      isPastFirstHalf &&
+      live.h1HomeScore !== undefined &&
+      live.h1AwayScore !== undefined &&
+      (live.h1HomeScore === 0 || live.h1AwayScore === 0)
+    ) {
+      return null;
+    }
+  }
+
+  // 6. Over / Under / Total markets (Goals, Corners, Cards)
+  const hasOverUnderOutcomes =
+    market.outcomes.some((o) => o.label.toLowerCase().includes("over")) &&
+    market.outcomes.some((o) => o.label.toLowerCase().includes("under"));
+  const isOverUnderMarket =
+    idLower.startsWith("ou") ||
+    idLower.includes("ou_") ||
+    nameLower.includes("total goals") ||
+    nameLower.includes("over/under") ||
+    nameLower.includes("over / under") ||
+    hasOverUnderOutcomes;
+
+  if (isOverUnderMarket) {
+    const line = parseOverUnderLine(market);
+    if (line !== null) {
+      const isCorners = /\bcorner(s)?\b/.test(combined);
+      const isCards = /\b(card|cards|booking|bookings|yellow|red)\b/.test(combined);
+      const isOtherStat = /\b(offside|foul|shot|throw|penalty|penalties|substitution)\b/.test(
+        combined,
+      );
+
+      if (isCorners) {
+        if (live.corners) {
+          const statTotal = isHomeOnly
+            ? live.corners[0]
+            : isAwayOnly
+              ? live.corners[1]
+              : live.corners[0] + live.corners[1];
+          if (statTotal > line) return null;
+        }
+      } else if (isCards) {
+        const cardsSource = /\bred\b/.test(combined) ? live.redCards : live.yellowCards;
+        if (cardsSource) {
+          const statTotal = isHomeOnly
+            ? cardsSource[0]
+            : isAwayOnly
+              ? cardsSource[1]
+              : cardsSource[0] + cardsSource[1];
+          if (statTotal > line) return null;
+        }
+      } else if (!isOtherStat) {
+        // Goals Over/Under market
+        if (isSecondHalfOnly) {
+          if (live.h1HomeScore !== undefined && live.h1AwayScore !== undefined) {
+            const h2Home = Math.max(0, homeScore - live.h1HomeScore);
+            const h2Away = Math.max(0, awayScore - live.h1AwayScore);
+            const relevantScore = isHomeOnly ? h2Home : isAwayOnly ? h2Away : h2Home + h2Away;
+            if (relevantScore > line) return null;
+          }
+        } else {
+          const relevantScore = isHomeOnly ? homeScore : isAwayOnly ? awayScore : totalGoals;
+          if (relevantScore > line) return null;
+        }
+      }
+    }
+  }
+
+  // 7. Combo BTTS + Over/Under (e.g. "BTTS & Over 2.5")
+  if (isBttsMarket && /\bover\b/.test(combined)) {
+    const line = parseOverUnderLine(market);
+    if (line !== null && homeScore >= 1 && awayScore >= 1 && totalGoals > line) {
+      return null;
+    }
+  }
+
+  // 8. Correct Score: prune impossible scorelines (e.g. 0-0 when already 1-0)
+  if (/\bcorrect\s+score\b/.test(combined) || idLower === "cs" || idLower.startsWith("cs_")) {
+    const validOutcomes = market.outcomes.filter((o) => {
+      const scoreMatch = o.label.trim().match(/^(\d+)\s*[-:]\s*(\d+)$/);
+      if (!scoreMatch) return true;
+      const h = Number(scoreMatch[1]);
+      const a = Number(scoreMatch[2]);
+      return h >= homeScore && a >= awayScore;
+    });
+    if (validOutcomes.length === 0) return null;
+    if (validOutcomes.length !== market.outcomes.length) {
+      return { ...market, outcomes: validOutcomes };
+    }
+  }
+
+  // 9. Exact Goals / Total Goals Exact / Multigoals: prune impossible counts/bands
+  if (
+    /\b(exact\s+goals|total\s+goals\s+exact|number\s+of\s+goals|multigoals)\b/.test(combined) &&
+    !isOverUnderMarket
+  ) {
+    const relevantGoals = isHomeOnly ? homeScore : isAwayOnly ? awayScore : totalGoals;
+    const validOutcomes = market.outcomes.filter((o) => {
+      const lbl = o.label.trim();
+      if (/^\d+$/.test(lbl)) {
+        return Number(lbl) >= relevantGoals;
+      }
+      const rangeMatch = lbl.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+      if (rangeMatch) {
+        return Number(rangeMatch[2]) >= relevantGoals;
+      }
+      return true;
+    });
+    if (validOutcomes.length < 2) return null;
+    if (validOutcomes.length !== market.outcomes.length) {
+      return { ...market, outcomes: validOutcomes };
+    }
+  }
+
+  return market;
+}
+
+/**
+ * Returns true when a market has exceeded its live lifespan for the given match state.
+ */
+export function isLiveMarketExpired(match: Match, market: Market): boolean {
+  return evaluateLiveMarket(match, market) === null;
+}
+
+/**
+ * Filters out live markets that have exceeded their lifespan (e.g. Over 2.5 when 3+ goals
+ * have been scored, 1st Half markets after halftime, BTTS once both teams scored, etc.).
+ * Prematch fixtures are returned unchanged.
+ */
+export function filterLiveMarkets(match: Match, markets: Market[] = match.markets): Market[] {
+  if (!match.live) return markets;
+  const active: Market[] = [];
+  for (const m of markets) {
+    const evaluated = evaluateLiveMarket(match, m);
+    if (evaluated) {
+      active.push(evaluated);
+    }
+  }
+  return active;
+}
+
+/**
+ * Returns full betting markets for the match detail page (/match/:id).
+ * For live fixtures, returns strictly authentic active markets from the live
+ * socket feed (with expired markets filtered out) — never synthetic or hardcoded odds.
+ */
+export function detailMarkets(match: Match): Market[] {
+  const base = filterLiveMarkets(match, match.markets || []);
+
+  if (match.live) {
+    return base;
+  }
+
+  if (base.length > 2) {
+    return base;
+  }
+
   const extras: Market[] = [
     {
       id: "dc",
@@ -598,3 +949,36 @@ export const formatUgx = (value: number) =>
     currency: "UGX",
     maximumFractionDigits: 0,
   }).format(value);
+
+/**
+ * Formats an in-play match clock from live feed period & elapsed minutes:
+ * - Period 2 / status "1015" -> "HT"
+ * - Period >= 4 / status "1017" -> "FT"
+ * - 1st-half added time (period === 1 && minute > 45) -> "45+X'"
+ * - 2nd-half added time ((period === 3 || period === undefined) && minute > 90) -> "90+X'"
+ * - Otherwise -> "{minute}'"
+ */
+export function formatLiveClock(live: NonNullable<Match["live"]>): string {
+  const statusLower = (live.status || "").trim().toLowerCase();
+  if (
+    live.period === 2 ||
+    statusLower === "1015" ||
+    /\b(ht|half\s*time|halftime)\b/.test(statusLower)
+  ) {
+    return "HT";
+  }
+  if (
+    (live.period !== undefined && live.period >= 4) ||
+    statusLower === "1017" ||
+    /\b(ft|full\s*time|finished|ended)\b/.test(statusLower)
+  ) {
+    return "FT";
+  }
+  if (live.period === 1 && live.minute > 45) {
+    return `45+${live.minute - 45}'`;
+  }
+  if ((live.period === undefined || live.period === 3) && live.minute > 90) {
+    return `90+${live.minute - 90}'`;
+  }
+  return `${live.minute}'`;
+}

@@ -15,7 +15,7 @@ import { io, Socket } from "socket.io-client";
 import protobuf from "protobufjs";
 import { API_CONFIG } from "./api-config";
 import { adaptLiveGame, type LiveSocketGameRaw } from "./matches-adapter";
-import type { Match } from "./betting-data";
+import { filterLiveMarkets, type Match } from "./betting-data";
 
 export type LiveSocketStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -37,7 +37,7 @@ message Market {
     int32 b              = 1;
     int32 r              = 2;
     string n             = 3;
-    optional double h    = 4;
+    optional float h     = 4;
     repeated Odd o      = 101;
 }
 
@@ -117,6 +117,7 @@ class LiveGamesSocketManager {
   private socket: Socket | null = null;
   private status: LiveSocketStatus = "disconnected";
   private liveMatchesMap = new Map<string, Match>();
+  private endedMatchesMap = new Map<string, Match>();
   private matchListeners = new Set<LiveGamesListener>();
   private statusListeners = new Set<StatusListener>();
   private eventType: protobuf.Type | null = null;
@@ -151,13 +152,21 @@ class LiveGamesSocketManager {
     this.clockInterval = setInterval(() => {
       let updated = false;
       for (const [id, m] of this.liveMatchesMap.entries()) {
-        if (m.live && m.live.minute < 95) {
-          this.liveMatchesMap.set(id, {
+        const period = m.live?.period;
+        const isActivePlay = period === undefined || period === 1 || period === 3;
+        if (m.live && isActivePlay && m.live.minute < 99) {
+          const nextMatch: Match = {
             ...m,
             live: {
               ...m.live,
               minute: m.live.minute + 1,
             },
+          };
+          const activeMarkets = filterLiveMarkets(nextMatch);
+          this.liveMatchesMap.set(id, {
+            ...nextMatch,
+            markets: activeMarkets,
+            marketCount: activeMarkets.length,
           });
           updated = true;
         }
@@ -248,6 +257,7 @@ class LiveGamesSocketManager {
             if (raw.inf && raw.inf.toLowerCase().includes("esoccer")) continue;
             const existingMatch = this.liveMatchesMap.get(String(raw.std));
             const adapted = adaptLiveGame(raw, existingMatch);
+            this.endedMatchesMap.delete(adapted.id);
             this.liveMatchesMap.set(adapted.id, adapted);
           }
 
@@ -277,6 +287,7 @@ class LiveGamesSocketManager {
         if (!raw) continue;
         const existingMatch = raw.std ? this.liveMatchesMap.get(String(raw.std)) : undefined;
         const adapted = adaptLiveGame(raw, existingMatch);
+        this.endedMatchesMap.delete(adapted.id);
         this.liveMatchesMap.set(adapted.id, adapted);
       }
 
@@ -286,19 +297,34 @@ class LiveGamesSocketManager {
     }
   }
 
+  private archiveEndedMatch(cleanId: string) {
+    const existing = this.liveMatchesMap.get(cleanId);
+    if (existing?.live) {
+      this.endedMatchesMap.set(cleanId, {
+        ...existing,
+        live: {
+          ...existing.live,
+          period: 4,
+          status: "1017",
+        },
+      });
+    }
+    this.liveMatchesMap.delete(cleanId);
+  }
+
   private handleExpiredKey(expiredId: unknown) {
     if (typeof expiredId === "string" || typeof expiredId === "number") {
       const cleanId = String(expiredId)
         .replace(/^live_game_/, "")
         .replace(/^buffer_/, "");
-      this.liveMatchesMap.delete(cleanId);
+      this.archiveEndedMatch(cleanId);
       this.broadcastMatches();
     } else if (Array.isArray(expiredId)) {
       for (const id of expiredId) {
         const cleanId = String(id)
           .replace(/^live_game_/, "")
           .replace(/^buffer_/, "");
-        this.liveMatchesMap.delete(cleanId);
+        this.archiveEndedMatch(cleanId);
       }
       this.broadcastMatches();
     }
@@ -355,6 +381,10 @@ class LiveGamesSocketManager {
 
   public getMatches(): Match[] {
     return Array.from(this.liveMatchesMap.values());
+  }
+
+  public getEndedMatches(): Match[] {
+    return Array.from(this.endedMatchesMap.values());
   }
 
   public getStatus(): LiveSocketStatus {

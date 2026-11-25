@@ -9,7 +9,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Search, X } from "lucide-react";
-import { matches as fallbackMatches, flagFor } from "@/lib/betting-data";
+import { matches as fallbackMatches, flagFor, formatLiveClock } from "@/lib/betting-data";
 import { usePrematchGames } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
 
@@ -109,12 +109,19 @@ export function SearchDialog() {
                   onClick={close}
                   className="block border-b border-border px-4 py-3 hover:bg-muted"
                 >
-                  <p className="text-sm font-bold">
-                    {m.home} v {m.away}
-                  </p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-bold text-foreground">
+                      {m.home} v {m.away}
+                    </p>
+                    {m.live && (
+                      <span className="font-mono text-xs font-bold tabular-nums text-live">
+                        {m.live.homeScore} - {m.live.awayScore}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {flagFor(m.country)} {m.country} · {m.league} ·{" "}
-                    {m.live ? `Live ${m.live.minute}'` : m.startsAt}
+                    {m.live ? `Live ${formatLiveClock(m.live)}` : m.startsAt}
                   </p>
                 </Link>
               ))}

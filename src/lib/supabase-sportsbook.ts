@@ -627,3 +627,55 @@ export async function updateTransactionStatus(
     console.warn("[Supabase] updateTransactionStatus notice:", err);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. USER FAVORITES (PINNED MATCHES & LEAGUES)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const isSupabaseEnvAvailable =
+  typeof import.meta !== "undefined" &&
+  Boolean(import.meta.env?.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY);
+
+export async function saveUserFavorites(
+  userId: string,
+  payload: { matches: unknown[]; leagues: unknown[]; updatedAt: string },
+): Promise<void> {
+  if (!userId || !isSupabaseEnvAvailable) return;
+  try {
+    await supabase.from("platform_config").upsert(
+      {
+        key: `favorites:${userId}`,
+        value: payload as unknown as Record<string, unknown>,
+        updated_at: payload.updatedAt || new Date().toISOString(),
+      },
+      { onConflict: "key" },
+    );
+  } catch (err) {
+    console.warn("[Supabase] saveUserFavorites warning:", err);
+  }
+}
+
+export async function fetchUserFavorites(
+  userId: string,
+): Promise<{ matches: unknown[]; leagues: unknown[]; updatedAt: string } | null> {
+  if (!userId || !isSupabaseEnvAvailable) return null;
+  try {
+    const { data, error } = await supabase
+      .from("platform_config")
+      .select("value")
+      .eq("key", `favorites:${userId}`)
+      .maybeSingle();
+
+    if (error || !data?.value || typeof data.value !== "object") return null;
+    const val = data.value as Record<string, unknown>;
+    return {
+      matches: Array.isArray(val.matches) ? val.matches : [],
+      leagues: Array.isArray(val.leagues) ? val.leagues : [],
+      updatedAt: typeof val.updatedAt === "string" ? val.updatedAt : new Date(0).toISOString(),
+    };
+  } catch (err) {
+    console.warn("[Supabase] fetchUserFavorites warning:", err);
+    return null;
+  }
+}

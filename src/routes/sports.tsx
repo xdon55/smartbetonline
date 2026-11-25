@@ -4,10 +4,10 @@
  * SmartBet feeds (https://api-games.smbet.net and wss://socket.smbet.net).
  * Desktop uses a 60/40 grid: scrollable match list left, stationary bet slip right.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Flame, Gift, Ticket, RotateCw } from "lucide-react";
-import { matches as fallbackMatches } from "@/lib/betting-data";
+import { Flame, Gift, Ticket, RotateCw, Star } from "lucide-react";
+import { flagFor, matches as fallbackMatches } from "@/lib/betting-data";
 import { MatchCard } from "@/components/match-card";
 import { BetSlip } from "@/components/bet-slip";
 import {
@@ -18,6 +18,7 @@ import {
 } from "@/components/sports-filters";
 import { usePrematchGames } from "@/hooks/use-prematch-games";
 import { useLiveGames } from "@/hooks/use-live-games";
+import { useFavorites } from "@/lib/favorites";
 
 export const Route = createFileRoute("/sports")({
   validateSearch: (search: Record<string, unknown>): { league?: string } => ({
@@ -60,6 +61,15 @@ function Index() {
     ...defaultFilters,
     league: searchLeague || "all",
   }));
+
+  useEffect(() => {
+    setFilters((prev) => ({
+      ...prev,
+      league: searchLeague || "all",
+    }));
+  }, [searchLeague]);
+
+  const { isLeagueFavorited, toggleFavoriteLeague } = useFavorites();
 
   const {
     matches: prematchMatches,
@@ -144,6 +154,9 @@ function Index() {
                   onClick={() => {
                     setTab(t.id);
                     setExpandedLeagues({});
+                    if (t.id === "live" && filters.kickoff !== "all") {
+                      setFilters((prev) => ({ ...prev, kickoff: "all" }));
+                    }
                   }}
                   className={`relative flex-1 px-3 py-3 font-display text-sm font-semibold transition-colors ${
                     tab === t.id
@@ -181,7 +194,12 @@ function Index() {
           </div>
 
           <div className="p-3">
-            <SportsFilters value={filters} onChange={setFilters} matchesList={base} />
+            <SportsFilters
+              value={filters}
+              onChange={setFilters}
+              showKickoff={tab !== "live"}
+              matchesList={base}
+            />
           </div>
 
           <div className="border-t border-border">
@@ -202,14 +220,43 @@ function Index() {
                     <section key={group.key} className="bg-card">
                       <header className="flex items-center justify-between bg-muted/40 px-3 py-2 text-xs font-bold text-foreground">
                         <div className="flex items-center gap-1.5 truncate">
-                          <span>⚽</span>
+                          <span className="shrink-0 leading-none">{flagFor(group.country)}</span>
                           <span className="truncate">
                             {group.country} · {group.league}
                           </span>
                         </div>
-                        <span className="ml-2 shrink-0 font-mono text-[11px] text-muted-foreground">
-                          ({totalGames})
-                        </span>
+                        <div className="ml-2 flex items-center gap-2 shrink-0">
+                          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                            ({totalGames})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleFavoriteLeague({
+                                league: group.league,
+                                country: group.country,
+                                sport: group.matches[0]?.sport || "Football",
+                              })
+                            }
+                            aria-label={
+                              isLeagueFavorited(group.league, group.country)
+                                ? `Unpin ${group.country} ${group.league}`
+                                : `Pin ${group.country} ${group.league} to favorites`
+                            }
+                            aria-pressed={isLeagueFavorited(group.league, group.country)}
+                            className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                              isLeagueFavorited(group.league, group.country)
+                                ? "text-accent hover:bg-accent/10"
+                                : "text-muted-foreground/70 hover:bg-muted hover:text-foreground"
+                            }`}
+                          >
+                            <Star
+                              className={`h-3.5 w-3.5 ${
+                                isLeagueFavorited(group.league, group.country) ? "fill-current" : ""
+                              }`}
+                            />
+                          </button>
+                        </div>
                       </header>
 
                       <div>

@@ -2,22 +2,30 @@
  * hooks/use-open-bets.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Tracks the count of active unsettled open bets.
- * Syncs with the SmartBet Online OpenBetsCount API (GET /api/Online/OpenBetsCount)
- * and active bet slips.
+ * Syncs exclusively with the SmartBet Online OpenBetsCount API
+ * (GET /api/Online/OpenBetsCount).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useEffect, useState, useCallback } from "react";
 import { smartBetApi } from "@/lib/api-smartbet";
 import { useBetSlip } from "@/lib/betslip";
+import { useAuth } from "@/hooks/use-auth";
 
 export function useOpenBets() {
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const { bets } = useBetSlip();
-  const localOpenCount = bets.filter((b) => b.status === "open").length;
+  const apiOpenCount = bets.filter((b) => b.status === "open").length;
 
-  const [openCount, setOpenCount] = useState<number>(localOpenCount);
+  const [openCount, setOpenCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
 
   const fetchCount = useCallback(async () => {
+    if (authLoading) return;
+    if (!isAuthenticated) {
+      setOpenCount(0);
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await smartBetApi.getOpenBetsCount();
@@ -31,20 +39,20 @@ export function useOpenBets() {
       ) {
         remoteCount = (res as { count: number }).count;
       }
-      setOpenCount(Math.max(remoteCount, localOpenCount));
+      setOpenCount(remoteCount);
     } catch {
-      setOpenCount(localOpenCount);
+      setOpenCount(apiOpenCount);
     } finally {
       setLoading(false);
     }
-  }, [localOpenCount]);
+  }, [authLoading, isAuthenticated, apiOpenCount]);
 
   useEffect(() => {
-    fetchCount();
+    void fetchCount();
   }, [fetchCount]);
 
   return {
-    openCount,
+    openCount: isAuthenticated ? openCount : 0,
     loading,
     refresh: fetchCount,
   };

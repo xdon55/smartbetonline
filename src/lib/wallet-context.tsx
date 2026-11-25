@@ -38,6 +38,11 @@ export type WalletContextValue = {
   syncBalance: (newBalance: number) => void;
 };
 
+const isSupabaseConfigured =
+  typeof import.meta !== "undefined" &&
+  Boolean(import.meta.env?.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY);
+
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 export function WalletProvider({ children }: { children: ReactNode }) {
@@ -124,8 +129,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // 3. Also load Supabase internal ledger transactions if signed in
-      if (user) {
+      // 3. Also load Supabase internal ledger transactions only if Supabase is configured
+      if (isSupabaseConfigured && user) {
         let bal: number | null = null;
         let txs: WalletTransaction[] = [];
 

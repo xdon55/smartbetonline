@@ -1,11 +1,11 @@
 /**
  * routes/withdraw.tsx — WITHDRAW page.
  *
- * Integrates directly with:
- * - SmartBet Withdrawal Request API (POST /api/Online/WithdrawRequest)
- * - Two-factor SMS Challenge & Confirmation (POST /api/Online/ConfirmWithdrawAlt)
+ * Implements:
+ * - Mobile Money Withdrawal Request (POST /api/Online/WithdrawRequest)
+ * - Two-factor SMS OTP Challenge & Confirmation (POST /api/Online/ConfirmWithdrawAlt + GET /api/Account/GetOTP resend)
  * - Retail OTC branch cashout code generation (POST /api/Online/WithdrawAtBranch)
- * - Real-time ledger accounting in Supabase
+ * - Optional Supabase ledger accounting when configured
  */
 import { useState, useEffect } from "react";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
@@ -18,6 +18,7 @@ import {
   Building2,
   Clock,
   ArrowRight,
+  Lock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,7 +27,7 @@ import { formatUgx } from "@/lib/betting-data";
 import { useWallet } from "@/hooks/use-wallet";
 import { useAuth } from "@/hooks/use-auth";
 import { internalWithdraw } from "@/modules/wallet/wallet.functions";
-import { ApiError, smartBetApi } from "@/lib/api-smartbet";
+import { ApiError, formatSmartBetPhone, smartBetApi } from "@/lib/api-smartbet";
 import { recordWalletTransaction } from "@/lib/supabase-sportsbook";
 
 export const Route = createFileRoute("/withdraw")({
@@ -44,6 +45,11 @@ export const Route = createFileRoute("/withdraw")({
   }),
   component: WithdrawPage,
 });
+
+const isSupabaseConfigured =
+  typeof import.meta !== "undefined" &&
+  Boolean(import.meta.env?.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY);
 
 const methods = [
   {
@@ -73,23 +79,31 @@ const quickWithdrawAmounts = [5000, 10000, 20000, 50000, 100000];
 
 function WithdrawPage() {
   const router = useRouter();
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, loading: authLoading } = useAuth();
   const { balance, phoneNumber, loading, refresh, syncBalance } = useWallet();
+
   const [method, setMethod] = useState("mtn");
   const [phone, setPhone] = useState("0772000000");
   const [phoneEdited, setPhoneEdited] = useState(false);
   const [amount, setAmount] = useState(10000);
   const [pending, setPending] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // OTP Challenge state
-  const [otpChallenge, setOtpChallenge] = useState<{ challengeId: string } | null>(null);
+  const [otpChallenge, setOtpChallenge] = useState<{
+    challengeId: string;
+    targetPhone: string;
+  } | null>(null);
   const [otpCode, setOtpCode] = useState("");
   const [otpTimer, setOtpTimer] = useState(60);
+  const [resendingOtp, setResendingOtp] = useState(false);
 
   // Completed / Pending states
   const [completedPayout, setCompletedPayout] = useState<{
     txId: string;
-    amount: number;
+    grossAmount: number;
+    feeAmount: number;
+    netAmount: number;
     phone: string;
     isPending?: boolean;
   } | null>(null);
@@ -123,7 +137,7 @@ function WithdrawPage() {
     reference: string,
     meta: Record<string, unknown>,
   ) {
-    if (!isAuthenticated || !user?.id) return;
+    if (!isSupabaseConfigured || !isAuthenticated || !user?.id) return;
     try {
       await (
         internalWithdraw as unknown as (args: {
@@ -147,9 +161,30 @@ function WithdrawPage() {
     }
   }
 
+  async function handleResendOtp() {
+    if (!otpChallenge || otpTimer > 0 || resendingOtp) return;
+    setErrorMessage(null);
+    setResendingOtp(true);
+    try {
+      await smartBetApi.getOtp(otpChallenge.targetPhone);
+      setOtpTimer(60);
+      toast.success(`New verification code sent to ${otpChallenge.targetPhone}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to resend verification code";
+      setErrorMessage(msg);
+      toast.error(msg);
+    } finally {
+      setResendingOtp(false);
+    }
+  }
+
   async function handleOtpConfirm(e: React.FormEvent) {
     e.preventDefault();
-    if (!otpChallenge || !otpCode.trim()) return;
+    setErrorMessage(null);
+    if (!otpChallenge || otpCode.trim().length < 4) {
+      setErrorMessage("Please enter the 6-digit SMS confirmation code.");
+      return;
+    }
 
     setPending(true);
     try {
@@ -157,28 +192,38 @@ function WithdrawPage() {
       const remoteStatus = String(res.status || res.Status || "").toUpperCase();
 
       if (remoteStatus === "FAILED" || remoteStatus === "REJECTED") {
-        toast.error(res.message || "Withdrawal confirmation failed");
+        const msg = res.message || "Withdrawal confirmation failed";
+        setErrorMessage(msg);
+        toast.error(msg);
         return;
       }
 
       const txId = res.transactionId || `TX-${Date.now().toString(36).toUpperCase()}`;
-      if (typeof res.balance === "number") {
-        syncBalance(res.balance);
+      const updatedBal =
+        typeof res.balance === "number"
+          ? res.balance
+          : typeof res.Balance === "number"
+            ? res.Balance
+            : undefined;
+      if (typeof updatedBal === "number") {
+        syncBalance(updatedBal);
       }
 
-      await recordDebitInLedgers(amount, `${method.toUpperCase()}:${phone}`, {
-        phone,
+      await recordDebitInLedgers(amount, `${method.toUpperCase()}:${otpChallenge.targetPhone}`, {
+        phone: otpChallenge.targetPhone,
         method,
         challengeId: otpChallenge.challengeId,
         transactionId: txId,
         status: remoteStatus || "SUCCESSFUL",
       });
 
-      void refresh();
+      await refresh();
       setCompletedPayout({
         txId,
-        amount: Math.max(0, amount - fee),
-        phone,
+        grossAmount: amount,
+        feeAmount: fee,
+        netAmount: Math.max(0, amount - fee),
+        phone: otpChallenge.targetPhone,
         isPending: remoteStatus === "PENDING" || remoteStatus === "UNKNOWN",
       });
       setOtpChallenge(null);
@@ -189,7 +234,9 @@ function WithdrawPage() {
           : "Withdrawal verified! Payout sent to Mobile Money.",
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "OTP confirmation failed");
+      const msg = err instanceof Error ? err.message : "OTP confirmation failed";
+      setErrorMessage(msg);
+      toast.error(msg);
     } finally {
       setPending(false);
     }
@@ -197,12 +244,24 @@ function WithdrawPage() {
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (amount > available) {
-      toast.error("Insufficient balance");
+    setErrorMessage(null);
+
+    if (!isAuthenticated) {
+      const msg = "Please sign in to request a withdrawal.";
+      setErrorMessage(msg);
+      toast.error(msg);
       return;
     }
     if (amount < 2000) {
-      toast.error("Minimum withdrawal is UGX 2,000");
+      const msg = "Minimum withdrawal is UGX 2,000.";
+      setErrorMessage(msg);
+      toast.error(msg);
+      return;
+    }
+    if (amount > available) {
+      const msg = `Insufficient balance (${formatUgx(available)} available).`;
+      setErrorMessage(msg);
+      toast.error(msg);
       return;
     }
 
@@ -211,9 +270,15 @@ function WithdrawPage() {
       if (method === "branch") {
         const res = await smartBetApi.withdrawAtBranch(amount);
         const code = res.code || res.Code || `BR-${Math.floor(Math.random() * 900000 + 100000)}`;
+        const updatedBal =
+          typeof res.balance === "number"
+            ? res.balance
+            : typeof res.Balance === "number"
+              ? res.Balance
+              : undefined;
 
-        if (typeof res.balance === "number") {
-          syncBalance(res.balance);
+        if (typeof updatedBal === "number") {
+          syncBalance(updatedBal);
         }
 
         await recordDebitInLedgers(amount, code, {
@@ -222,68 +287,87 @@ function WithdrawPage() {
           type: "voucher",
         });
 
+        await refresh();
         setBranchVoucher({
           code,
           amount,
           expiresIn: res.expiresIn || "48 hours",
         });
-        void refresh();
         toast.success(`Branch voucher code generated: ${code}`);
         return;
       }
 
-      if (phone.replace(/\D/g, "").length < 9) {
-        toast.error("Please enter a valid recipient phone number");
+      const formattedPhone = formatSmartBetPhone(phone);
+      if (formattedPhone.length < 11) {
+        const msg = "Please enter a valid recipient mobile number (e.g. 0772 000 000).";
+        setErrorMessage(msg);
+        toast.error(msg);
         return;
       }
 
       // Mobile Money withdrawal (POST /api/Online/WithdrawRequest)
       const requestId = crypto.randomUUID();
-      const res = await smartBetApi.requestWithdrawal(requestId, amount, phone);
+      const res = await smartBetApi.requestWithdrawal(requestId, amount, formattedPhone);
       const remoteStatus = String(res.status || res.Status || "").toUpperCase();
 
       if (remoteStatus === "OTP" && res.challengeId) {
-        setOtpChallenge({ challengeId: res.challengeId });
+        setOtpChallenge({
+          challengeId: res.challengeId,
+          targetPhone: res.phoneNumber || formattedPhone,
+        });
         setOtpCode("");
         setOtpTimer(60);
-        toast.info(res.message || "SMS security code sent to your mobile money number.");
+        toast.info(res.message || `SMS security code sent to ${formattedPhone}.`);
         return;
       }
 
       if (remoteStatus === "FAILED" || remoteStatus === "REJECTED") {
-        toast.error(res.message || "Withdrawal request was declined.");
+        const msg = res.message || "Withdrawal request was declined.";
+        setErrorMessage(msg);
+        toast.error(msg);
         return;
       }
 
-      if (typeof res.balance === "number") {
-        syncBalance(res.balance);
+      const updatedBal =
+        typeof res.balance === "number"
+          ? res.balance
+          : typeof res.Balance === "number"
+            ? res.Balance
+            : undefined;
+      if (typeof updatedBal === "number") {
+        syncBalance(updatedBal);
       }
 
-      await recordDebitInLedgers(amount, `${method.toUpperCase()}:${phone}`, {
-        phone,
+      await recordDebitInLedgers(amount, `${method.toUpperCase()}:${formattedPhone}`, {
+        phone: formattedPhone,
         method,
         requestId,
         status: remoteStatus || "SUCCESSFUL",
       });
 
+      await refresh();
       setCompletedPayout({
         txId: res.transactionId || `TX-${Date.now().toString(36).toUpperCase()}`,
-        amount: Math.max(0, amount - fee),
-        phone,
+        grossAmount: amount,
+        feeAmount: fee,
+        netAmount: Math.max(0, amount - fee),
+        phone: formattedPhone,
         isPending: remoteStatus === "PENDING" || remoteStatus === "UNKNOWN",
       });
-      void refresh();
       toast.success(
         remoteStatus === "PENDING"
           ? `Withdrawal of ${formatUgx(amount)} is pending telecom confirmation.`
           : `Withdrawal of ${formatUgx(amount)} submitted successfully`,
       );
     } catch (err) {
-      if (err instanceof ApiError) {
-        toast.error(err.message);
-      } else {
-        toast.error(err instanceof Error ? err.message : "Withdrawal failed");
-      }
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Withdrawal failed";
+      setErrorMessage(msg);
+      toast.error(msg);
     } finally {
       setPending(false);
     }
@@ -297,22 +381,50 @@ function WithdrawPage() {
           <p className="text-xs text-muted-foreground">
             Withdrawable balance:{" "}
             <span className="font-bold text-foreground">
-              {loading ? "—" : formatUgx(available)}
+              {authLoading || loading
+                ? "—"
+                : isAuthenticated
+                  ? formatUgx(available)
+                  : "Sign in required"}
             </span>
           </p>
         </div>
         <Link
           to="/transactions"
-          className="text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+          className="text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
         >
           History
         </Link>
       </div>
 
-      {/* ─────────────────────────────────────────────────────────────────────────────
-          STATE 1: BRANCH CASHOUT VOUCHER CARD
-          ───────────────────────────────────────────────────────────────────────────── */}
-      {branchVoucher ? (
+      {!authLoading && !isAuthenticated ? (
+        <section className="space-y-3 rounded-xl border border-border bg-card p-5 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-accent/15 text-accent">
+            <Lock className="h-6 w-6" aria-hidden="true" />
+          </div>
+          <h2 className="font-display text-base font-bold uppercase">Sign In to Withdraw</h2>
+          <p className="text-xs text-muted-foreground">
+            You must be signed in to your SMARTBET account before requesting Mobile Money payouts or
+            Branch Cashout vouchers.
+          </p>
+          <Button asChild className="w-full bg-accent text-accent-foreground hover:opacity-90">
+            <Link to="/auth">Sign in / Register</Link>
+          </Button>
+        </section>
+      ) : null}
+
+      {errorMessage ? (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-xs font-medium text-destructive"
+        >
+          {errorMessage}
+        </div>
+      ) : null}
+
+      {/* STATE 1: BRANCH CASHOUT VOUCHER CARD */}
+      {isAuthenticated && branchVoucher ? (
         <section className="space-y-4 rounded-xl border border-accent bg-accent/10 p-5 text-center shadow-lg">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-accent/20 text-accent">
             <Building2 className="h-8 w-8" />
@@ -325,7 +437,7 @@ function WithdrawPage() {
             </p>
           </div>
 
-          <div className="rounded-xl border border-accent/30 bg-card p-4 space-y-2">
+          <div className="space-y-2 rounded-xl border border-accent/30 bg-card p-4">
             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
               Voucher Code
             </p>
@@ -357,7 +469,7 @@ function WithdrawPage() {
             </div>
           </div>
 
-          <div className="rounded-lg bg-secondary/50 p-3 text-left text-xs space-y-1.5">
+          <div className="space-y-1.5 rounded-lg bg-secondary/50 p-3 text-left text-xs">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Payout Amount</span>
               <span className="font-bold tabular-nums text-foreground">
@@ -380,15 +492,13 @@ function WithdrawPage() {
               setBranchVoucher(null);
               router.navigate({ to: "/transactions" });
             }}
-            className="w-full text-xs bg-accent text-accent-foreground hover:opacity-90"
+            className="w-full bg-accent text-xs text-accent-foreground hover:opacity-90"
           >
             Done & View Transactions
           </Button>
         </section>
-      ) : completedPayout ? (
-        /* ─────────────────────────────────────────────────────────────────────────────
-           STATE 2: MOBILE MONEY PAYOUT COMPLETED / PENDING
-           ───────────────────────────────────────────────────────────────────────────── */
+      ) : isAuthenticated && completedPayout ? (
+        /* STATE 2: MOBILE MONEY PAYOUT COMPLETED / PENDING */
         <section className="space-y-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-500">
             {completedPayout.isPending ? (
@@ -410,11 +520,23 @@ function WithdrawPage() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-border bg-card p-3 space-y-1 text-xs text-left">
+          <div className="space-y-1.5 rounded-lg border border-border bg-card p-3 text-left text-xs">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Net Payout</span>
+              <span className="text-muted-foreground">Withdrawn from Wallet</span>
+              <span className="font-medium tabular-nums text-foreground">
+                {formatUgx(completedPayout.grossAmount)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Network Fee (1%)</span>
+              <span className="tabular-nums text-muted-foreground">
+                {formatUgx(completedPayout.feeAmount)}
+              </span>
+            </div>
+            <div className="flex justify-between border-t border-border pt-1.5">
+              <span className="text-muted-foreground">Net Payout Sent</span>
               <span className="font-bold tabular-nums text-accent">
-                {formatUgx(completedPayout.amount)}
+                {formatUgx(completedPayout.netAmount)}
               </span>
             </div>
             <div className="flex justify-between">
@@ -423,7 +545,7 @@ function WithdrawPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Estimated Arrival</span>
-              <span className="text-foreground font-medium">Within 2 to 5 minutes</span>
+              <span className="font-medium text-foreground">Within 2 to 5 minutes</span>
             </div>
           </div>
 
@@ -439,16 +561,14 @@ function WithdrawPage() {
             <Button
               type="button"
               onClick={() => router.navigate({ to: "/transactions" })}
-              className="flex-1 text-xs bg-accent text-accent-foreground hover:opacity-90"
+              className="flex-1 bg-accent text-xs text-accent-foreground hover:opacity-90"
             >
               View Transactions <ArrowRight className="ml-1 h-3.5 w-3.5" />
             </Button>
           </div>
         </section>
-      ) : otpChallenge ? (
-        /* ─────────────────────────────────────────────────────────────────────────────
-           STATE 3: 2FA SMS CHALLENGE CONFIRMATION
-           ───────────────────────────────────────────────────────────────────────────── */
+      ) : isAuthenticated && otpChallenge ? (
+        /* STATE 3: 2FA SMS CHALLENGE CONFIRMATION */
         <form
           onSubmit={handleOtpConfirm}
           className="space-y-4 rounded-xl border border-border bg-card p-5"
@@ -460,19 +580,19 @@ function WithdrawPage() {
             <div>
               <h2 className="font-display text-sm font-bold uppercase">Security Verification</h2>
               <p className="text-[11px] text-muted-foreground">
-                Enter the 6-digit SMS code sent to {phone}.
+                Enter the 6-digit SMS code sent to {otpChallenge.targetPhone}.
               </p>
             </div>
           </div>
 
-          <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs space-y-1">
+          <div className="space-y-1 rounded-lg border border-border bg-secondary/30 p-3 text-xs">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Withdrawal Amount</span>
               <span className="font-bold tabular-nums text-foreground">{formatUgx(amount)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Destination</span>
-              <span className="font-mono text-foreground">{phone}</span>
+              <span className="font-mono text-foreground">{otpChallenge.targetPhone}</span>
             </div>
           </div>
 
@@ -481,8 +601,13 @@ function WithdrawPage() {
             <Input
               id="w-otp"
               value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder="••••••"
+              onChange={(e) => {
+                setErrorMessage(null);
+                setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6));
+              }}
+              placeholder="123456"
+              inputMode="numeric"
+              autoComplete="one-time-code"
               maxLength={6}
               autoFocus
               className="text-center font-mono text-xl tracking-widest"
@@ -494,23 +619,20 @@ function WithdrawPage() {
             <span>
               {otpTimer > 0 ? (
                 <>
-                  Expires in{" "}
+                  Resend available in{" "}
                   <span className="font-mono tabular-nums text-foreground">{otpTimer}s</span>
                 </>
               ) : (
-                <span className="text-destructive font-semibold">Code expired</span>
+                <span className="font-semibold text-amber-500">Ready to resend OTP</span>
               )}
             </span>
             <button
               type="button"
-              disabled={otpTimer > 0}
-              onClick={() => {
-                setOtpTimer(60);
-                toast.info("A new verification code has been dispatched.");
-              }}
+              disabled={otpTimer > 0 || resendingOtp}
+              onClick={handleResendOtp}
               className="font-semibold text-accent hover:underline disabled:opacity-40"
             >
-              Resend Code
+              {resendingOtp ? "Sending..." : "Resend Code"}
             </button>
           </div>
 
@@ -519,30 +641,34 @@ function WithdrawPage() {
               type="button"
               variant="outline"
               className="flex-1 text-xs"
-              onClick={() => setOtpChallenge(null)}
+              onClick={() => {
+                setErrorMessage(null);
+                setOtpChallenge(null);
+              }}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="flex-1 text-xs bg-accent text-accent-foreground hover:opacity-90"
+              className="flex-1 bg-accent text-xs text-accent-foreground hover:opacity-90"
               disabled={pending || otpCode.length < 4}
             >
               {pending ? "Verifying..." : "Confirm & Send"}
             </Button>
           </div>
         </form>
-      ) : (
-        /* ─────────────────────────────────────────────────────────────────────────────
-           STATE 4: WITHDRAW INPUT FORM
-           ───────────────────────────────────────────────────────────────────────────── */
+      ) : isAuthenticated ? (
+        /* STATE 4: WITHDRAW INPUT FORM */
         <>
           <div className="space-y-2">
             {methods.map((m) => (
               <button
                 key={m.id}
                 type="button"
-                onClick={() => setMethod(m.id)}
+                onClick={() => {
+                  setErrorMessage(null);
+                  setMethod(m.id);
+                }}
                 className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left transition-colors ${
                   method === m.id
                     ? "border-accent bg-accent/10"
@@ -551,7 +677,7 @@ function WithdrawPage() {
               >
                 <div className="flex items-center gap-3">
                   <span
-                    className={`rounded px-2 py-0.5 text-[10px] tracking-wider uppercase ${m.badgeClass}`}
+                    className={`rounded px-2 py-0.5 text-[10px] uppercase tracking-wider ${m.badgeClass}`}
                   >
                     {m.badge}
                   </span>
@@ -581,6 +707,7 @@ function WithdrawPage() {
                   inputMode="tel"
                   value={phone}
                   onChange={(e) => {
+                    setErrorMessage(null);
                     setPhoneEdited(true);
                     setPhone(e.target.value);
                   }}
@@ -589,8 +716,8 @@ function WithdrawPage() {
                 />
               </div>
             ) : (
-              <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground flex items-center gap-2">
-                <Building2 className="h-5 w-5 text-accent shrink-0" />
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+                <Building2 className="h-5 w-5 shrink-0 text-accent" />
                 <span>Collect cash over the counter at any SMARTBET branch.</span>
               </div>
             )}
@@ -601,7 +728,10 @@ function WithdrawPage() {
                 id="w-amount"
                 inputMode="numeric"
                 value={amount}
-                onChange={(e) => setAmount(Number(e.target.value.replace(/\D/g, "")) || 0)}
+                onChange={(e) => {
+                  setErrorMessage(null);
+                  setAmount(Number(e.target.value.replace(/\D/g, "")) || 0);
+                }}
               />
             </div>
 
@@ -610,7 +740,10 @@ function WithdrawPage() {
                 <button
                   key={q}
                   type="button"
-                  onClick={() => setAmount(q)}
+                  onClick={() => {
+                    setErrorMessage(null);
+                    setAmount(q);
+                  }}
                   className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${
                     amount === q
                       ? "bg-accent text-accent-foreground"
@@ -651,12 +784,12 @@ function WithdrawPage() {
                   : `Withdraw ${formatUgx(amount)}`}
             </Button>
 
-            <p className="text-[11px] text-muted-foreground text-center">
+            <p className="text-center text-[11px] text-muted-foreground">
               Minimum withdrawal UGX 2,000. Mobile money payouts arrive within 2–5 minutes.
             </p>
           </form>
         </>
-      )}
+      ) : null}
     </main>
   );
 }

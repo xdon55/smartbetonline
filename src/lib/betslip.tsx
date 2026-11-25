@@ -3,13 +3,10 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * GLOBAL BET SLIP STATE (React context).
  *
- * This is the heart of the betting flow:
- *   MatchCard / detail page  →  toggle(Selection)  →  BetSlip UI  →  placeBet() / createBooking()
- *
  * Integrated with:
  * - SmartBet Online Ticket API (POST /api/Ticket)
  * - SmartBet Online Booking API (POST /api/Ticket/Booking)
- * - Supabase PostgreSQL for preferences & ticket history
+ * - SmartBet Online Bet History API (GET /api/Online/MyBets)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import {
@@ -22,40 +19,130 @@ import {
   type ReactNode,
 } from "react";
 import { ApiError, smartBetApi, type TicketPayload, type OnlineSettings } from "./api-smartbet";
-import { formatUgx } from "./betting-data";
+import { formatUgx, type Match } from "./betting-data";
 import { useWalletContext } from "./wallet-context";
-import {
-  saveBookingCode,
-  retrieveBookingCode,
-  saveBetTicket,
-  fetchUserBetTickets,
-} from "./supabase-sportsbook";
+import { useAuth } from "@/hooks/use-auth";
+import { saveBookingCode, retrieveBookingCode } from "./supabase-sportsbook";
 
 /** One leg on the slip. `id` must be unique per match+market+outcome. */
 export type Selection = {
   id: string;
   matchId: string;
-  match: string; // display name, e.g. "Arsenal v Liverpool"
-  market: string; // display name, e.g. "1X2"
-  pick: string; // display label, e.g. "1"
+  match: string;
+  market: string;
+  pick: string;
   odds: number;
   betCategory?: string;
+  line?: number | string | null;
   matchOddId?: number;
   bookMakerId?: number;
   isLive?: boolean;
 };
 
-/** A submitted bet ("receipt") shown on the My Bets pages. */
+/** A submitted bet ("receipt") returned by the SmartBet API. */
 export type PlacedBet = {
   id: string;
-  code: string; // booking-style reference shown to the user
+  code: string;
   placedAt: string;
-  stake: number; // UGX
-  totalOdds: number; // combined accumulator odds
-  potential: number; // potential payout in UGX
+  stake: number;
+  totalOdds: number;
+  potential: number;
   status: "open" | "won" | "lost";
   selections: Selection[];
 };
+
+export function mapSelectionLeg(leg: Record<string, unknown>, fallbackId: string): Selection {
+  const matchId = String(
+    leg["matchId"] ?? leg["MatchId"] ?? leg["originalMatchId"] ?? leg["OriginalMatchId"] ?? "",
+  ).trim();
+  return {
+    id: String(leg["id"] ?? fallbackId),
+    matchId,
+    match: String(
+      leg["match"] ??
+        leg["matchName"] ??
+        leg["MatchName"] ??
+        (matchId ? `Match #${matchId}` : "Fixture"),
+    ),
+    market: String(leg["market"] ?? leg["betCategory"] ?? leg["BetCategory"] ?? "1X2"),
+    pick: String(leg["pick"] ?? leg["betOption"] ?? leg["BetOption"] ?? ""),
+    odds: Number(leg["odds"] ?? leg["odd"] ?? leg["Odd"] ?? 1),
+    isLive: Boolean(leg["isLive"] ?? leg["IsLive"]),
+  };
+}
+
+function normalizeFixtureTitle(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/\s+vs\.?\s+|\s+v\s+|\s+-\s+/g, " v ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function createLiveMatchLookup(
+  liveMatches: Match[],
+): (selection: Selection) => Match | undefined {
+  const byId = new Map<string, Match>();
+  const byTitle = new Map<string, Match>();
+
+  for (const m of liveMatches) {
+    if (!m.live) continue;
+    byId.set(String(m.id).trim(), m);
+    byTitle.set(normalizeFixtureTitle(`${m.home} v ${m.away}`), m);
+  }
+
+  return (selection: Selection) => {
+    const cleanId = String(selection.matchId || "").trim();
+    if (cleanId) {
+      const idHit = byId.get(cleanId);
+      if (idHit) return idHit;
+    }
+    const normalized = normalizeFixtureTitle(selection.match || "");
+    if (normalized) {
+      return byTitle.get(normalized);
+    }
+    return undefined;
+  };
+}
+
+export function mapApiBetToPlacedBet(row: Record<string, unknown>): PlacedBet {
+  const id = String(row["ReceiptId"] ?? row["receiptId"] ?? row["BookingCode"] ?? row["id"] ?? "");
+  const code = String(row["BookingCode"] ?? row["bookingCode"] ?? row["ReceiptId"] ?? id);
+  const rawSelections = Array.isArray(row["selections"])
+    ? (row["selections"] as Array<Record<string, unknown>>)
+    : Array.isArray(row["Selections"])
+      ? (row["Selections"] as Array<Record<string, unknown>>)
+      : [];
+
+  const selections: Selection[] = rawSelections.map((leg, idx) =>
+    mapSelectionLeg(leg, `leg-${id}-${idx}`),
+  );
+
+  const rawDate = row["Date"] ?? row["date"] ?? row["createdAt"];
+  const formattedDate = rawDate
+    ? new Date(String(rawDate)).toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+
+  const rawStatus = String(row["Status"] ?? row["status"] ?? "open").toLowerCase();
+  const status: "open" | "won" | "lost" =
+    rawStatus === "won" ? "won" : rawStatus === "lost" ? "lost" : "open";
+
+  return {
+    id,
+    code,
+    placedAt: formattedDate,
+    stake: Number(row["Stake"] ?? row["stake"] ?? row["TotalStake"] ?? 0),
+    totalOdds: Number(row["Odds"] ?? row["odds"] ?? row["TotalOdds"] ?? 1),
+    potential: Number(row["Payout"] ?? row["payout"] ?? row["PotentialPayout"] ?? 0),
+    status,
+    selections,
+  };
+}
 
 /** Everything the context exposes to consumers via useBetSlip(). */
 type BetSlipContextValue = {
@@ -71,10 +158,11 @@ type BetSlipContextValue = {
   bonusPercent: number;
   bonusAmount: number;
   totalReturnWithBonus: number;
-  open: boolean; // mobile fullscreen slip visibility
+  open: boolean;
   setOpen: (v: boolean) => void;
   bets: PlacedBet[];
-  placeBet: () => PlacedBet | null;
+  betsLoading: boolean;
+  refreshBets: () => Promise<PlacedBet[]>;
   placeBetAsync: () => Promise<PlacedBet>;
   createBookingAsync: () => Promise<string>;
   loadBookingCode: (code: string) => Promise<{ count: number; totalOdds: number }>;
@@ -85,81 +173,44 @@ type BetSlipContextValue = {
 const BetSlipContext = createContext<BetSlipContextValue | null>(null);
 
 const STORAGE_KEY_SLIP = "smartbet_draft_slip";
-const STORAGE_KEY_BETS = "smartbet_placed_bets";
+const LEGACY_BETS_STORAGE_KEY = "smartbet_placed_bets";
 
-const initialBets: PlacedBet[] = [
-  {
-    id: "b-201",
-    code: "SB4KQ7X",
-    placedAt: "Yesterday 19:12",
-    stake: 5000,
-    totalOdds: 4.42,
-    potential: 22100,
-    status: "won",
-    selections: [
-      {
-        id: "x1",
-        matchId: "m9",
-        match: "Express FC v SC Villa",
-        market: "1X2",
-        pick: "1",
-        odds: 2.1,
-      },
-      {
-        id: "x2",
-        matchId: "m10",
-        match: "Chelsea v Everton",
-        market: "Total goals 2.5",
-        pick: "Over",
-        odds: 2.1,
-      },
-    ],
-  },
-  {
-    id: "b-202",
-    code: "SB9WM2D",
-    placedAt: "Today 12:04",
-    stake: 10000,
-    totalOdds: 3.18,
-    potential: 31800,
-    status: "open",
-    selections: [
-      {
-        id: "x3",
-        matchId: "m11",
-        match: "Inter v Napoli",
-        market: "Both teams to score",
-        pick: "Yes",
-        odds: 1.88,
-      },
-      {
-        id: "x4",
-        matchId: "m12",
-        match: "Bayern München v RB Leipzig",
-        market: "1X2",
-        pick: "1",
-        odds: 1.69,
-      },
-    ],
-  },
-];
+const isSupabaseConfigured =
+  typeof import.meta !== "undefined" &&
+  Boolean(import.meta.env?.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY);
 
 /** Provider mounted once in src/routes/__root.tsx around the whole app. */
 export function BetSlipProvider({ children }: { children: ReactNode }) {
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const { balance, syncBalance, refresh: refreshWallet } = useWalletContext();
   const [selections, setSelections] = useState<Selection[]>([]);
-  const [stake, setStake] = useState(2000); // default stake in UGX
+  const [stake, setStake] = useState(2000);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [bets, setBets] = useState<PlacedBet[]>(initialBets);
+  const [bets, setBets] = useState<PlacedBet[]>([]);
+  const [betsLoading, setBetsLoading] = useState(false);
   const [settings, setSettings] = useState<OnlineSettings>({
     MinStake: 500,
     MaxStake: 50000000,
     MaxPayOut: 500000000,
   });
 
-  // Load online settings on mount
+  // Load online settings on mount & purge any legacy localStorage bets cache
   useEffect(() => {
+    try {
+      localStorage.removeItem(LEGACY_BETS_STORAGE_KEY);
+      const savedSlip = localStorage.getItem(STORAGE_KEY_SLIP);
+      if (savedSlip) {
+        const parsed = JSON.parse(savedSlip);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setSelections(parsed);
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+
     smartBetApi
       .getOnlineSettings()
       .then((cfg) => {
@@ -170,83 +221,41 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, []);
 
-  // Load from localStorage after mount to prevent SSR hydration mismatch
-  useEffect(() => {
-    try {
-      const savedSlip = localStorage.getItem(STORAGE_KEY_SLIP);
-      if (savedSlip) {
-        const parsed = JSON.parse(savedSlip);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setSelections(parsed);
-        }
-      }
-      const savedBets = localStorage.getItem(STORAGE_KEY_BETS);
-      if (savedBets) {
-        const parsedBets = JSON.parse(savedBets);
-        if (Array.isArray(parsedBets) && parsedBets.length > 0) {
-          setBets(parsedBets);
-        }
-      }
-    } catch {
-      // Ignore
+  const refreshBets = useCallback(async (): Promise<PlacedBet[]> => {
+    if (!isAuthenticated) {
+      setBets([]);
+      return [];
     }
 
-    // Hydrate tickets from SmartBet online API + Supabase
-    Promise.allSettled([smartBetApi.getMyBets(), fetchUserBetTickets()]).then(
-      ([myBetsRes, supabaseRes]) => {
-        const remoteTickets: PlacedBet[] = [];
-        if (supabaseRes.status === "fulfilled" && Array.isArray(supabaseRes.value)) {
-          remoteTickets.push(...supabaseRes.value);
-        }
-        if (myBetsRes.status === "fulfilled" && Array.isArray(myBetsRes.value)) {
-          myBetsRes.value.forEach((row: Record<string, unknown>) => {
-            const id = String(row.ReceiptId || row.BookingCode || Math.random());
-            const code = String(row.BookingCode || row.ReceiptId || "SB-REC");
-            const rawSelections = Array.isArray(row.selections) ? row.selections : [];
-            const selections: Selection[] = rawSelections.map(
-              (leg: Record<string, unknown>, idx: number) => ({
-                id: String(leg.id || `leg-${id}-${idx}`),
-                matchId: String(leg.matchId || 123456),
-                match: String(leg.match || leg.MatchName || `Match #${leg.matchId || 123456}`),
-                market: String(leg.market || leg.betCategory || "1X2"),
-                pick: String(leg.pick || leg.betOption || "1"),
-                odds: Number(leg.odds || leg.odd || 1.8),
-              }),
-            );
-            remoteTickets.push({
-              id,
-              code,
-              placedAt: row.Date
-                ? new Date(String(row.Date)).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : "Recent",
-              stake: Number(row.Stake || 1000),
-              totalOdds: Number(row.Odds || 2.0),
-              potential: Number(row.Payout || 2000),
-              status: (String(row.Status || "").toLowerCase() === "won"
-                ? "won"
-                : String(row.Status || "").toLowerCase() === "lost"
-                  ? "lost"
-                  : "open") as "open" | "won" | "lost",
-              selections,
-            });
-          });
-        }
-        if (remoteTickets.length > 0) {
-          setBets((prev) => {
-            const map = new Map<string, PlacedBet>();
-            for (const b of prev) map.set(b.id || b.code, b);
-            for (const b of remoteTickets) {
-              if (!map.has(b.id || b.code)) map.set(b.id || b.code, b);
-            }
-            return Array.from(map.values());
-          });
-        }
-      },
-    );
-  }, []);
+    setBetsLoading(true);
+    try {
+      const rows = await smartBetApi.getMyBets();
+      if (!Array.isArray(rows)) {
+        setBets([]);
+        return [];
+      }
+      const mapped = rows
+        .filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object"))
+        .map(mapApiBetToPlacedBet);
+      setBets(mapped);
+      return mapped;
+    } catch {
+      setBets([]);
+      return [];
+    } finally {
+      setBetsLoading(false);
+    }
+  }, [isAuthenticated]);
+
+  // Hydrate bet history exclusively from API whenever auth state settles
+  useEffect(() => {
+    if (authLoading) return;
+    if (!isAuthenticated) {
+      setBets([]);
+      return;
+    }
+    void refreshBets();
+  }, [authLoading, isAuthenticated, refreshBets]);
 
   // Sync draft slip to localStorage
   useEffect(() => {
@@ -257,19 +266,6 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     }
   }, [selections]);
 
-  // Sync bets to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_BETS, JSON.stringify(bets));
-    } catch {
-      // Ignore storage errors
-    }
-  }, [bets]);
-
-  /**
-   * Add/remove a selection. Tapping the same odds button again removes it;
-   * tapping a different outcome in the same market on the same match swaps it.
-   */
   const toggle = useCallback((s: Selection) => {
     setSelections((prev) => {
       if (prev.some((p) => p.id === s.id)) return prev.filter((p) => p.id !== s.id);
@@ -283,12 +279,9 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
 
   const clear = useCallback(() => setSelections([]), []);
 
-  // Accumulator odds: multiply all leg odds (empty slip = 1).
   const totalOdds = useMemo(() => selections.reduce((acc, s) => acc * s.odds, 1), [selections]);
-
   const potentialWin = selections.length ? Math.round(stake * totalOdds) : 0;
 
-  // Multi-bet bonus calculation based on selection count (3+ legs qualify for bonus)
   const bonusPercent = useMemo(() => {
     const count = selections.length;
     if (count < 3) return 0;
@@ -300,21 +293,17 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     if (count <= 15) return 40;
     if (count <= 20) return 60;
     if (count <= 25) return 80;
-    return 100; // 30+ legs = 100% bonus
+    return 100;
   }, [selections.length]);
 
   const bonusAmount = useMemo(() => {
     if (!potentialWin || !bonusPercent) return 0;
-    // Net profit = potentialWin - stake
     const netProfit = Math.max(0, potentialWin - stake);
     return Math.round(netProfit * (bonusPercent / 100));
   }, [potentialWin, stake, bonusPercent]);
 
   const totalReturnWithBonus = potentialWin + bonusAmount;
 
-  /**
-   * Build the official TicketPayload required by the SmartBet API.
-   */
   const buildTicketPayload = useCallback((): TicketPayload => {
     const isAnyLive = selections.some((s) => s.isLive);
     return {
@@ -324,7 +313,13 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
         betCategory: s.betCategory || (s.market.toLowerCase().includes("goal") ? "ou" : "1x2"),
         betOption: s.pick,
         bookMakerId: s.bookMakerId || 1,
-        line: null,
+        line:
+          s.line !== undefined &&
+          s.line !== null &&
+          s.line !== "" &&
+          Number.isFinite(Number(s.line))
+            ? Number(s.line)
+            : null,
         matchId: parseInt(s.matchId, 10) || 123456,
         matchOddId: s.matchOddId || 9001,
         odd: s.odds,
@@ -337,9 +332,6 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     };
   }, [selections, bonusAmount, totalOdds, stake]);
 
-  /**
-   * Generates a real booking code via POST /api/Ticket/Booking and saves to Supabase.
-   */
   const createBookingAsync = useCallback(async (): Promise<string> => {
     if (!selections.length) throw new Error("Bet slip is empty");
 
@@ -347,29 +339,23 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     const payload = buildTicketPayload();
 
     try {
-      let code = "";
-      try {
-        const res = await smartBetApi.createBooking(payload);
-        code =
-          res.bookingCode ||
-          res.BookingCode ||
-          res.code ||
-          res.Code ||
-          `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
-      } catch {
-        code = `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+      const res = await smartBetApi.createBooking(payload);
+      const code = res.bookingCode || res.BookingCode || res.code || res.Code || "";
+      if (!code) {
+        throw new Error("Booking code was not returned by server.");
       }
 
-      // Persist to Supabase platform_config, audit_log, and local cache
-      try {
-        await saveBookingCode({
-          code,
-          selections,
-          stake,
-          totalOdds,
-        });
-      } catch (err) {
-        console.warn("[BetSlip] Supabase booking persistence notice:", err);
+      if (isSupabaseConfigured) {
+        try {
+          await saveBookingCode({
+            code,
+            selections,
+            stake,
+            totalOdds,
+          });
+        } catch {
+          // Optional persistence
+        }
       }
 
       return code;
@@ -378,10 +364,10 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     }
   }, [selections, buildTicketPayload, totalOdds, stake]);
 
-  /**
-   * Submits the ticket to backend and records receipt in Supabase.
-   */
   const placeBetAsync = useCallback(async (): Promise<PlacedBet> => {
+    if (!isAuthenticated) {
+      throw new Error("Please sign in to place a bet.");
+    }
     if (!selections.length) throw new Error("Bet slip is empty");
     if (stake < settings.MinStake) {
       throw new Error(`Minimum stake allowed is ${formatUgx(settings.MinStake)}`);
@@ -403,42 +389,32 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     const computedPotential = Math.round(stake * odds);
 
     try {
-      let ticketId = "";
-      let code = "";
+      const res = await smartBetApi.submitTicket(payload);
+      const resObj = res as Record<string, unknown>;
+      const ticketId = String(res.receiptId || resObj.ReceiptId || "");
+      const code = String(res.bookingCode || resObj.BookingCode || ticketId);
 
-      try {
-        const res = await smartBetApi.submitTicket(payload);
-        const resObj = res as Record<string, unknown>;
-        ticketId = String(
-          res.receiptId || resObj.ReceiptId || `b-${Math.floor(Math.random() * 9000) + 1000}`,
-        );
-        code = String(
-          res.bookingCode ||
-            resObj.BookingCode ||
-            `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
-        );
-        const remoteBalance =
-          typeof res.balance === "number"
-            ? res.balance
-            : typeof resObj.Balance === "number"
-              ? (resObj.Balance as number)
-              : null;
-        if (remoteBalance !== null) {
-          syncBalance(remoteBalance);
-        } else if (typeof balance === "number") {
-          syncBalance(Math.max(0, balance - stake));
-        }
-      } catch (err) {
-        if (err instanceof ApiError && err.status && err.status >= 400 && err.status < 500) {
-          throw err;
-        }
-        throw err instanceof Error ? err : new Error("Failed to submit bet ticket");
+      const remoteBalance =
+        typeof res.balance === "number"
+          ? res.balance
+          : typeof resObj.Balance === "number"
+            ? (resObj.Balance as number)
+            : null;
+      if (remoteBalance !== null) {
+        syncBalance(remoteBalance);
+      } else if (typeof balance === "number") {
+        syncBalance(Math.max(0, balance - stake));
       }
 
       const placed: PlacedBet = {
-        id: ticketId,
-        code,
-        placedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        id: ticketId || code,
+        code: code || ticketId,
+        placedAt: new Date().toLocaleString([], {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
         stake,
         totalOdds: Number(odds.toFixed(2)),
         potential: computedPotential,
@@ -446,36 +422,22 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
         selections: currentSelections,
       };
 
-      setBets((prev) => {
-        const updated = [
-          placed,
-          ...prev.filter((b) => b.id !== placed.id && b.code !== placed.code),
-        ];
-        try {
-          localStorage.setItem(STORAGE_KEY_BETS, JSON.stringify(updated));
-        } catch {
-          // Ignore
-        }
-        return updated;
-      });
       setSelections([]);
       setOpen(false);
 
-      // Record in Supabase transactions, audit_log, and local storage
-      try {
-        await saveBetTicket(placed);
-      } catch (err) {
-        console.warn("[BetSlip] Supabase bet ticket persistence notice:", err);
-      }
-
-      // Refresh wallet balance & statement
-      await refreshWallet();
+      await Promise.allSettled([refreshBets(), refreshWallet()]);
 
       return placed;
+    } catch (err) {
+      if (err instanceof ApiError && err.status && err.status >= 400 && err.status < 500) {
+        throw err;
+      }
+      throw err instanceof Error ? err : new Error("Failed to submit bet ticket");
     } finally {
       setLoading(false);
     }
   }, [
+    isAuthenticated,
     selections,
     buildTicketPayload,
     totalOdds,
@@ -484,12 +446,10 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     settings,
     totalReturnWithBonus,
     syncBalance,
+    refreshBets,
     refreshWallet,
   ]);
 
-  /**
-   * Retrieves a booking code from Supabase / API and restores selections to slip.
-   */
   const loadBookingCode = useCallback(
     async (rawCode: string): Promise<{ count: number; totalOdds: number }> => {
       const clean = rawCode.trim().toUpperCase();
@@ -497,43 +457,47 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
 
       setLoading(true);
       try {
-        // 1. Try Supabase platform_config / audit_log / local cache
-        const found = await retrieveBookingCode(clean);
-        if (found && Array.isArray(found.selections) && found.selections.length > 0) {
-          setSelections(found.selections);
-          if (typeof found.stake === "number" && found.stake >= 500) {
-            setStake(found.stake);
-          }
-          setOpen(true);
-          return { count: found.selections.length, totalOdds: found.totalOdds };
-        }
-
-        // 2. Try SmartBet Online ticket selections API
+        // 1. Try SmartBet Online ticket selections API
         try {
-          const remote = (await smartBetApi.getTicketSelections(clean)) as Array<{
-            MatchId: number;
-            MatchName?: string;
-            BetCategory?: string;
-            BetOption?: string;
-            Odd?: number;
-          }>;
+          const remoteRes = await smartBetApi.getTicketSelections(clean);
+          const remoteList = Array.isArray(remoteRes)
+            ? remoteRes
+            : (remoteRes as { selections?: unknown[] })?.selections;
 
-          if (Array.isArray(remote) && remote.length > 0) {
-            const loaded: Selection[] = remote.map((leg) => ({
-              id: `${leg.MatchId}-${leg.BetCategory || "1x2"}-${leg.BetOption || "1"}`,
-              matchId: String(leg.MatchId),
-              match: leg.MatchName || `Match #${leg.MatchId}`,
-              market: leg.BetCategory || "1X2",
-              pick: leg.BetOption || "1",
-              odds: Number(leg.Odd || 2.0),
-            }));
+          if (Array.isArray(remoteList) && remoteList.length > 0) {
+            const loaded: Selection[] = remoteList.map((raw, idx) => {
+              const leg = raw as Record<string, unknown>;
+              const matchId = String(leg.MatchId ?? leg.matchId ?? "");
+              const market = String(leg.BetCategory ?? leg.betCategory ?? leg.market ?? "1X2");
+              const pick = String(leg.BetOption ?? leg.betOption ?? leg.pick ?? "1");
+              return {
+                id: String(leg.id ?? `${matchId}-${market}-${pick}-${idx}`),
+                matchId,
+                match: String(leg.MatchName ?? leg.match ?? `Match #${matchId}`),
+                market,
+                pick,
+                odds: Number(leg.Odd ?? leg.odd ?? leg.odds ?? 1),
+              };
+            });
             setSelections(loaded);
             setOpen(true);
             const computedOdds = loaded.reduce((acc, s) => acc * s.odds, 1);
             return { count: loaded.length, totalOdds: Number(computedOdds.toFixed(2)) };
           }
         } catch {
-          // Fall through
+          // Fall through to Supabase booking lookup if configured
+        }
+
+        if (isSupabaseConfigured) {
+          const found = await retrieveBookingCode(clean);
+          if (found && Array.isArray(found.selections) && found.selections.length > 0) {
+            setSelections(found.selections);
+            if (typeof found.stake === "number" && found.stake >= 500) {
+              setStake(found.stake);
+            }
+            setOpen(true);
+            return { count: found.selections.length, totalOdds: found.totalOdds };
+          }
         }
 
         throw new Error(`Booking code ${clean} was not found`);
@@ -543,29 +507,6 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
-
-  /**
-   * Synchronous placeBet wrapper for backward compatibility.
-   */
-  const placeBet = useCallback((): PlacedBet | null => {
-    if (!selections.length) return null;
-    const odds = totalOdds;
-    const placed: PlacedBet = {
-      id: `b-${Math.floor(Math.random() * 9000) + 1000}`,
-      code: `SB${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
-      placedAt: "Just now",
-      stake,
-      totalOdds: Number(odds.toFixed(2)),
-      potential: Math.round(stake * odds),
-      status: "open",
-      selections,
-    };
-    setBets((prev) => [placed, ...prev]);
-    saveBetTicket(placed).catch(() => {});
-    setSelections([]);
-    setOpen(false);
-    return placed;
-  }, [selections, totalOdds, stake]);
 
   const value: BetSlipContextValue = {
     selections,
@@ -583,7 +524,8 @@ export function BetSlipProvider({ children }: { children: ReactNode }) {
     open,
     setOpen,
     bets,
-    placeBet,
+    betsLoading,
+    refreshBets,
     placeBetAsync,
     createBookingAsync,
     loadBookingCode,
